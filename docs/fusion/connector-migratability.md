@@ -7,7 +7,7 @@
 ## 结论（TL;DR）
 
 - **可迁移（连接）**：6 类 —— `mysql / postgresql / oracle / sqlserver / sqlite` 直接迁移，`clickhouse` 可迁移但需评估（DF 走 HTTP JSON 接口，参数面不同）。
-- **占位禁用（连接）**：1 类 —— `hive`（DF 无适配器）→ 迁为 `status=disabled` 占位 + 告警。
+- **stub 禁用（连接）**：1 类 —— `hive`（DF 无适配器）→ 迁为 `status=disabled` 的 stub 行 + 告警。
 - **排除（连接）**：14 类 —— object_storage 5 + file_transfer 3 + message_queue 4 + api 2。
 - **资产**：`table` 可迁移；`sql_view` 特殊承载（`ont_bindings.source_sql`）；`document` 排除。
 - **实测现状**：9 条连接（sqlite=6、mysql=2、s3=1）全部 `active`、全部 `credential_type=plain`；255 份资产（table=254、document=1）、0 份 sql_view、88 条 object_bindings。
@@ -51,11 +51,11 @@ connections by status: [('active', 9)]
 | `sqlserver` | 0 | `sqlserver` ✓ | **可迁移**（无存量） | server 模板参数直通 |
 | `clickhouse` | 0 | `clickhouse` ✓ | **可迁移 · 需评估**（无存量） | DF 走 HTTP JSON 接口（默认端口 8123、`secure` 布尔），与元枢 native 口径不同；无存量，评估后放行 |
 
-### 2.2 database 类 —— `占位禁用`
+### 2.2 database 类 —— `stub 禁用`
 
 | 元枢 type | 现状 | DF 适配器 | 处置 |
 |---|---|---|---|
-| `hive` | 0 | 无 | **占位禁用**：迁为 `status=disabled` 的 datasources 占位行 + 迁移告警，未来接 Spark/HiveServer2（可借道 DF `spark` 适配器）时转正 |
+| `hive` | 0 | 无 | **stub 禁用（适配器就绪前禁用接入）**：迁为 `status=disabled` 的 datasources stub 行 + 迁移告警，未来接 Spark/HiveServer2（可借道 DF `spark` 适配器）时转正 |
 
 ### 2.3 非数据库类 —— `排除`（迁移排除清单）
 
@@ -67,7 +67,7 @@ connections by status: [('active', 9)]
 | message_queue | `kafka / pulsar / rocketmq / rabbitmq` | 0 | DF 无 MQ 适配器 |
 | api | `rest / graphql` | 0 | DF 无 API 适配器 |
 
-排除项处置：迁移脚本**跳过并输出排除清单**（连接名/类型/资产名），不做占位行；后续需要时单独立项（对齐 D8 的 Redis/Neo4j/MinIO 一期不迁口径）。
+排除项处置：迁移脚本**跳过并输出排除清单**（连接名/类型/资产名），不做 stub 行；后续需要时单独立项（对齐 D8 的 Redis/Neo4j/MinIO 一期不迁口径）。
 
 ## 3. 资产盘点（D1 三形态）
 
@@ -112,7 +112,7 @@ DataFoundry（本仓库）：
 
 ```text
 白名单（迁移）:  connection.type ∈ {sqlite, mysql, postgresql, oracle, sqlserver, clickhouse*}
-占位（禁用）:    connection.type ∈ {hive}            → status=disabled + 告警
+stub（禁用）:    connection.type ∈ {hive}            → status=disabled + 告警
 排除（跳过）:    connection.type ∈ {s3, oss, cos, obs, minio, ftp, sftp, hdfs,
                                     kafka, pulsar, rocketmq, rabbitmq, rest, graphql}
                 asset.kind = document

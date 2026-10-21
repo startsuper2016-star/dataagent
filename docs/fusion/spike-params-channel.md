@@ -104,7 +104,7 @@ grep -rln "AdapterSqlInput\|RunSqlReadonlyInput" .../src | grep -v test         
 ```
 
 - 引用该输入契约的非测试文件共 **10 个**（全 `src` 共 14 个 `.ts`）：`types.ts`（契约定义）、`index.ts`（导出面）、以及全部 **8 个适配器文件**（local-sql / local-dataset / sql-family / search / nosql / lakehouse / warehouse / enterprise-sql）。
-- 即扩 `params` 是**横切改动**：改契约 → 8 个适配器逐个接参数绑定 → 各引擎方言验证（SQLite/DuckDB/PG/MySQL/NoSQL 对命名参数 `:pN` 的支持形态各不相同，多数只支持 `?`/`$1` 位置参数，还需改 SQL 生成端的占位符策略）。
+- 即扩 `params` 是**横切改动**：改契约 → 8 个适配器逐个接参数绑定 → 各引擎方言验证（SQLite/DuckDB/PG/MySQL/NoSQL 对命名参数 `:pN` 的支持形态各不相同，多数只支持 `?`/`$1` 位置参数，还需改 SQL 生成端的 placeholder 替换策略）。
 - 结论：Phase 0/1 不具备性价比；列为 **Phase 3 加固项**，届时以「位置参数 `?` + 数组绑定」为首选形态重新设计。
 
 ## 4. D2 最终结论
