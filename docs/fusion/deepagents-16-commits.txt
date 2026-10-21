@@ -1,0 +1,16 @@
+17c290ea feat(agentkit): introduce plugin-driven agent runtime with TUI integration
+2e145b8c !449 merge feat/plugin-driven-agent-runtime into deepagents_refactor_new
+55ab0c2d 将重写 core 接进 agentkit
+8f18f048 !460 merge cursor/deepagents-agentkit-core-1b9e into deepagents_refactor_new
+f624ad38 feat(agentkit): expose configured models to tools via native context
+79241d8f !473 merge deepagents_refactor_new into deepagents_refactor_new
+03ccfa4d feat(agentkit): add built-in semantic client and agent configuration
+7f2e2094 !493 merge feat/agentkit-semantic-client into deepagents_refactor_new
+7f997944 为 deepagents_refactor_new 增加产品测试与出包入口
+0d101bd4 !501 merge cursor/product-test-route-8342 into deepagents_refactor_new
+87b6051a docs(agentkit): consolidate product documentation and simplify TUI theming
+b2be8f37 !503 merge docs/agentkit-formal-docs into deepagents_refactor_new
+e0d3c7ab nl2sql
+4b61bdd3 !506 merge deepagents_refactor_new into deepagents_refactor_new
+0ccee6db feat(nl2sql): expose database context, persist results and narrow task contract
+bf5b58dc !515 merge perf/nl2sql-task-contract into deepagents_refactor_new
