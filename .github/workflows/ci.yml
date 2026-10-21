@@ -21,7 +21,7 @@ env:
 jobs:
   build-and-web-tests:
     name: Build and Web Tests
-    if: github.repository == 'datagallery-lab/datafoundry'
+    if: github.repository == 'startsuper2016-star/dataagent'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -54,7 +54,7 @@ jobs:
 
   core-smoke-tests:
     name: Core Smoke Tests
-    if: github.repository == 'datagallery-lab/datafoundry'
+    if: github.repository == 'startsuper2016-star/dataagent'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -121,7 +121,7 @@ jobs:
 
   native-deploy-smoke:
     name: Native Deploy Smoke
-    if: github.repository == 'datagallery-lab/datafoundry'
+    if: github.repository == 'startsuper2016-star/dataagent'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -153,7 +153,7 @@ jobs:
 
   docs:
     name: Docs
-    if: github.repository == 'datagallery-lab/datafoundry'
+    if: github.repository == 'startsuper2016-star/dataagent'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
