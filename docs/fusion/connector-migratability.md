@@ -84,28 +84,29 @@ connections by status: [('active', 9)]
 Phase 1 脚本必须逐条实现；任何一条未处理即断言失败中止（回滚四件套内断言）。
 
 1. **PK 用户域**：DF `data_sources` 主键为 `(user_id, id)`（`packages/metadata/src/index.ts:3677` 等，`PRIMARY KEY (user_id, id)` 模式；裁决 D6 同口径）。元枢 `connections.created_by` 可空且无用户表强约束 → **迁移必须为每条连接指定 owner user**（映射到融合侧指定 workspace/user 身份），不允许 NULL owner 落库。
-2. **凭据重加密（D7）**：元枢 `credential_ref = plain://<base64_json>`，密钥为 `CREDENTIAL_ENCRYPTION_KEY`（`backend/app/models/connection.py:56-61`）；DF 消费方是 `EncryptedSecretStore`，密钥为 `SECRET_MASTER_KEY`（`packages/metadata/src/index.ts:692,729`；缺钥即 `SECRET_MASTER_KEY_REQUIRED`，`packages/metadata/src/config-store.ts:305`）。**迁移 = 元枢解密 → DF 重加密入库，全程禁止明文搬运/落日志**。实测：9/9 条连接均为 `credential_type=plain`，全部走此管线。
+2. **凭据重加密（D7）**：元枢 `credential_ref = fernet://<Fernet 令牌>`，经 `FernetVault` 以 `CREDENTIAL_ENCRYPTION_KEY` 解密（该 key 在元枢根目录 .env，与 `SECRET_KEY` 二选一；未设置时兜底派生 `sha256("ontology:credentials:v1:" + SECRET_KEY)` —— **迁移脚本必须同时尝试两条派生路径**）。**迁移前置断言：迁移前须对全部存量连接逐条试解密，9/9 解密成功才允许执行迁移。**DF 消费方是 `EncryptedSecretStore`，密钥为 `SECRET_MASTER_KEY`（`packages/metadata/src/index.ts:692,729`；缺钥即 `SECRET_MASTER_KEY_REQUIRED`，`packages/metadata/src/config-store.ts:305`），输出为 DF 侧重加密入库。**迁移 = 元枢解密 → DF 重加密，全程禁止明文搬运/落日志**。实测：9/9 条连接的 credential_ref 全部为 `fernet://gAAAAAB...`（Fernet 令牌）；`credential_type='plain'` 仅是列的陈旧默认值，与 ref 格式无关。格式权威定义见元枢仓库 `backend/app/services/data_plane/credential_vault.py`（`connection.py:56-61` 的 `plain://` 注释已过时，`plain://` 仅为读兼容遗留，以 vault 实现为准）。
 3. **config 键名差异**：
    - DF 适配器吃 `username`（非 `user`；`serverDatabaseParameters`，supported-types.ts:257-266）；
    - sqlite/duckdb 吃 `path`（supported-types.ts:10,18）；**实测元枢 sqlite 的文件路径在 `connections.database` 列（params 为 `'null'`）→ 必须 `database → config_json.path` 重定位**；
    - oracle：元枢 host/port + params.sid → DF `connectString` 拼接；
    - 元枢 params 的 `charset / ssl_ca / sid / jdbc_extra` 在 DF 侧**无消费方**：标注丢弃（`charset/ssl_ca/jdbc_extra`）或惰性保留原样于扩展字段（`sid`，仅 oracle 拼串用）。**另实测：元枢 params 列是双重 JSON 编码字符串，脚本需 `JSON.parse` 两次并容忍 `'null'`。**
-4. **status 语义映射**：元枢 `active | inactive | error`（connection.py:70-71）→ DF `ready | disabled | failed | deleted`（`packages/metadata/src/index.ts:405`）。映射：`active→ready`、`inactive→disabled`、`error→failed`；DF `deleted` 不由迁移产生。实测 9/9 为 `active` → 全部 `ready`。另注意 DF gateway 摘要展示层把 `deleted` 显示为 `disabled`（data-gateway/src/index.ts:411），盘点口径以存储值为准。
+4. **status 语义映射**：元枢 `active | inactive | error`（connection.py:70-71）→ DF `ready | disabled | failed | deleted`（`packages/metadata/src/index.ts:404`）。映射：`active→ready`、`inactive→disabled`、`error→failed`；DF `deleted` 不由迁移产生。实测 9/9 为 `active` → 全部 `ready`。另注意 DF gateway 摘要展示层把 `deleted` 显示为 `disabled`（data-gateway/src/index.ts:411），盘点口径以存储值为准。
 5. **脱敏模型不等价**：元枢是**列级分级** `sensitivity_tags`（`{"phone":"pii","amount":"sensitive"}`，asset.py:63-64）；DF 是**二值清单** `maskFields: string[]`（packages/data-gateway/src/types.ts:156）。分级→二值必然有损（pii 与 sensitive 不可区分）→ **golden 断言集必须排除脱敏输出差异，或显式声明对齐规则**（对齐规则：`sensitivity_tags` 非空列全部并入 `maskFields`，分级信息保留在迁移报告不落 DF）。
 
 ## 5. 判定依据（代码引用）
 
 元枢（源仓库 `ontology-master`）：
-- `backend/app/models/connection.py:16-61` —— 五大类 type 域、params 各类有效字段、`plain://` 凭据格式、status 枚举
+- `backend/app/models/connection.py:16-61` —— 五大类 type 域、params 各类有效字段、status 枚举（`:56-61` 的 `plain://` 注释已过时，仅为读兼容遗留）
+- `backend/app/services/data_plane/credential_vault.py` —— 凭据格式权威实现（FernetVault：`fernet://` 加解密、`CREDENTIAL_ENCRYPTION_KEY` 及派生键兜底）
 - `backend/app/models/asset.py:30-64` —— kind 三形态、locator 按 kind 校验、sensitivity_tags 列级分级
+- `docs/datafoundry-fusion-plan.md` 架构裁决节 —— D1（收窄口径原文）、D6（user/workspace 身份绑定）、D7（凭据密码学管线）、D8（一期不迁清单）
 
 DataFoundry（本仓库）：
 - `packages/data-gateway/src/index.ts:367-396` —— 28 项适配器注册表；`:353-359` credential_ref → `secrets.get` 消费链；`:411` deleted→disabled 展示映射
 - `packages/data-gateway/src/supported-types.ts:8-18` —— sqlite/duckdb `path` 参数；`:257-266` server 模板 `username`；`:98-108` oracle `connectString`
-- `packages/metadata/src/index.ts:405` —— DataSourceRecord status 四值；`:692,729` —— EncryptedSecretStore 装配；`:3677` —— `(user_id, id)` 复合主键模式
+- `packages/metadata/src/index.ts:404` —— DataSourceRecord status 四值；`:692,729` —— EncryptedSecretStore 装配；`:3677` —— `(user_id, id)` 复合主键模式
 - `packages/metadata/src/config-store.ts:305` —— `SECRET_MASTER_KEY_REQUIRED`
 - `packages/data-gateway/src/types.ts:156` —— `maskFields: string[]` 二值脱敏
-- `docs/datafoundry-fusion-plan.md` 架构裁决节 —— D1（收窄口径原文）、D6（user/workspace 身份绑定）、D7（凭据密码学管线）、D8（一期不迁清单）
 
 ## 6. Phase 1 迁移脚本输入摘要
 
