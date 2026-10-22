@@ -4,3 +4,4 @@ export * from "./inline-params.js";
 export * from "./bindings.js";
 export * from "./query.js";
 export * from "./ontology-sql.js";
+export * from "./traverse.js";
