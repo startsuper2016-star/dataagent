@@ -174,7 +174,7 @@ const handleBindings = (method: string | undefined, db: DatabaseSync): ConfigApi
 
 const openSpcConnection = (metadataStore: OntologyRouteContext["metadataStore"], userId: string): DatabaseSync => {
   const ds = metadataStore.dataSources
-    .list({ user_id: userId })
+    .list({ user_id: userId, enabled_only: true })
     .find((d) => d.name === SPC_DATASOURCE_NAME);
   if (!ds) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `当前用户未配置数据源 ${SPC_DATASOURCE_NAME}`);
