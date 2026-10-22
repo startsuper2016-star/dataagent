@@ -16,7 +16,7 @@
 - 参数内联必须采用 spike 附录 C 的**单遍替换版** + `^p\d+$` 键名断言（Task 6 评审定案，naive 版有级联与 `$` 模式双缺陷）。
 - 单查询行上限常量 `MAX_ROWS = 200`（golden 口径）；元数据写入单进程（migration 脚本运行时不得有 apps/api 写入）。
 - 迁移保留元枢原 id（实体/属性/关系/函数 id 原样），便于校验与断链排查。
-- 本 slice **不做**：fernet 凭据重加密工具（mysql 连接以 `status=disabled` 占位迁移）、API 路由、治理 UI——分别属后续 slice。
+- 本 slice **不做**：fernet 凭据重加密工具（mysql 连接以 `status=disabled` stub 行迁移）、API 路由、治理 UI——分别属后续 slice。
 
 ---
 
@@ -457,7 +457,7 @@ import { describe, expect, it, beforeAll } from "vitest";
 import { objectQuery } from "./query.js";
 
 const GOLDEN = JSON.parse(readFileSync(new URL("./golden/golden.json", import.meta.url), "utf-8"));
-const SPC_DB = process.env.SPC_DB_PATH ?? "C:/Users/shuan/Downloads/ontology-master (3)/ontology-master/local-data/spc_mvp/spc_mvp.db";
+const SPC_DB = process.env.SPC_DB_PATH ?? "C:/data/local/spc_mvp/spc_mvp.db"（本机默认路径见 FUSION_BASE.md 附注）;
 ```
 （spc_mvp.db 绝对路径以环境变量注入；CI 无此文件时 `describe.skipIf(!existsSync(SPC_DB))`。）
 fixture 绑定：`AnomWafer→v_anom_wafer`、`RcaDaily→v_day_flag`、`RcaChamberRate→v_chamber_rate`、`AnomLot→v_anom_lot`（fieldMap 列=属性名，id 列=id）。
