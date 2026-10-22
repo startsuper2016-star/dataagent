@@ -53,27 +53,26 @@ export function matchFilterValue(value: unknown, condition: unknown): boolean {
   return matchSingle(value, "eq", condition);
 }
 
-export function buildWhere(fieldMap: Record<string, string>, filters: Filters): { where: string[]; params: Record<string, unknown> } {
+// 位置参数形态（? + unknown[]）：node:sqlite prepare 位置绑定最简且无键冲突面。
+// named 形态（:pN）留给 inlineParams 的 SQL 内联场景。
+export function buildWhere(fieldMap: Record<string, string>, filters: Filters): { where: string[]; params: unknown[] } {
   const where: string[] = [];
-  const params: Record<string, unknown> = {};
-  let i = 0;
+  const params: unknown[] = [];
   for (const [attr, op, value] of iterFilterConditions(filters)) {
     const col = fieldMap[attr];
     if (!col) throw new Error(`属性未定义或未绑定: ${attr}`);
-    const n = i; i += 1;   // 每条件无条件推进序号，对齐 Python enumerate 语义（is_null/not_null 占号不占参）
     const quoted = `"${col}"`;
     if (op === "is_null") { where.push(`${quoted} IS NULL`); continue; }
     if (op === "not_null") { where.push(`${quoted} IS NOT NULL`); continue; }
     if (op === "in" || op === "not_in") {
       const values = Array.isArray(value) ? value : [value];
       if (values.length === 0) { where.push(op === "in" ? "1 = 0" : "1 = 1"); continue; }
-      const keys = values.map((v, j) => { const key = `p${n}_${j}`; params[key] = v; return `:${key}`; });
-      where.push(`${quoted} ${op === "in" ? "IN" : "NOT IN"} (${keys.join(", ")})`);
+      where.push(`${quoted} ${op === "in" ? "IN" : "NOT IN"} (${values.map(() => "?").join(", ")})`);
+      params.push(...values);
       continue;
     }
-    const key = `p${n}`;
-    params[key] = value;
-    where.push(`${quoted} ${OP_SQL[op]} :${key}`);
+    where.push(`${quoted} ${OP_SQL[op]} ?`);
+    params.push(value);
   }
   return { where, params };
 }

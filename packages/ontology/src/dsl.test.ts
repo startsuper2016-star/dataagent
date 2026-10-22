@@ -15,12 +15,12 @@ describe("iterFilterConditions", () => {
 });
 
 describe("buildWhere", () => {
-  it("translates ops with quoted columns and named params", () => {
+  it("translates ops with quoted columns and positional params", () => {
     const { where, params } = buildWhere(FM, { chamber_id: { eq: "A", neq: "B" }, stat_date: { gte: "2026-09-21" } });
-    expect(where[0]).toBe('"chamber_id" = :p0');
-    expect(where[1]).toBe('"chamber_id" <> :p1');
-    expect(where[2]).toBe('"stat_date" >= :p2');
-    expect(params).toEqual({ p0: "A", p1: "B", p2: "2026-09-21" });
+    expect(where[0]).toBe('"chamber_id" = ?');
+    expect(where[1]).toBe('"chamber_id" <> ?');
+    expect(where[2]).toBe('"stat_date" >= ?');
+    expect(params).toEqual(["A", "B", "2026-09-21"]);
   });
   it("empty in is 1=0, empty not_in is 1=1", () => {
     expect(buildWhere(FM, { chamber_id: { in: [] } }).where[0]).toBe("1 = 0");
@@ -28,30 +28,30 @@ describe("buildWhere", () => {
   });
   it("expanding in with multiple params", () => {
     const { where, params } = buildWhere(FM, { chamber_id: { in: ["A", "B"] } });
-    expect(where[0]).toBe('"chamber_id" IN (:p0_0, :p0_1)');
-    expect(params).toEqual({ p0_0: "A", p0_1: "B" });
+    expect(where[0]).toBe('"chamber_id" IN (?, ?)');
+    expect(params).toEqual(["A", "B"]);
   });
   it("is_null / not_null need no param", () => {
     expect(buildWhere(FM, { day_mean: { is_null: true } }).where[0]).toBe('"day_mean" IS NULL');
     expect(buildWhere(FM, { day_mean: { not_null: true } }).where[0]).toBe('"day_mean" IS NOT NULL');
   });
-  it("is_null still advances the param index for later conditions", () => {
+  it("is_null contributes no positional param for later conditions", () => {
     const { where, params } = buildWhere(FM, { day_mean: { is_null: true }, stat_date: { eq: "d" } });
     expect(where[0]).toBe('"day_mean" IS NULL');
-    expect(where[1]).toBe('"stat_date" = :p1');
-    expect(params).toEqual({ p1: "d" });
+    expect(where[1]).toBe('"stat_date" = ?');
+    expect(params).toEqual(["d"]);
   });
-  it("regression: mixed in and eq use disjoint param indices", () => {
+  it("regression: mixed in and eq append params in condition order", () => {
     const { where, params } = buildWhere(FM, { chamber_id: { in: ["A", "B"] }, stat_date: { eq: "d" } });
-    expect(where[0]).toBe('"chamber_id" IN (:p0_0, :p0_1)');
-    expect(where[1]).toBe('"stat_date" = :p1');
-    expect(params).toEqual({ p0_0: "A", p0_1: "B", p1: "d" });
+    expect(where[0]).toBe('"chamber_id" IN (?, ?)');
+    expect(where[1]).toBe('"stat_date" = ?');
+    expect(params).toEqual(["A", "B", "d"]);
   });
-  it("regression: two in-conditions do not collide param keys", () => {
+  it("regression: two in-conditions append params in order without collision", () => {
     const { where, params } = buildWhere(FM, { chamber_id: { in: ["A", "B"] }, stat_date: { in: ["d1", "d2"] } });
-    expect(where[0]).toBe('"chamber_id" IN (:p0_0, :p0_1)');
-    expect(where[1]).toBe('"stat_date" IN (:p1_0, :p1_1)');
-    expect(params).toEqual({ p0_0: "A", p0_1: "B", p1_0: "d1", p1_1: "d2" });
+    expect(where[0]).toBe('"chamber_id" IN (?, ?)');
+    expect(where[1]).toBe('"stat_date" IN (?, ?)');
+    expect(params).toEqual(["A", "B", "d1", "d2"]);
   });
   it("throws on unknown attribute", () => {
     expect(() => buildWhere(FM, { nope: 1 })).toThrow();
@@ -59,8 +59,8 @@ describe("buildWhere", () => {
   it("multi-op dict ANDs together", () => {
     const { where } = buildWhere(FM, { stat_date: { gte: "2026-09-21", lte: "2026-09-30" } });
     expect(where).toHaveLength(2);
-    expect(where[0]).toBe('"stat_date" >= :p0');
-    expect(where[1]).toBe('"stat_date" <= :p1');
+    expect(where[0]).toBe('"stat_date" >= ?');
+    expect(where[1]).toBe('"stat_date" <= ?');
   });
 });
 
