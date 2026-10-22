@@ -8,12 +8,13 @@ import type {
 
 import type { PasswordAuthConfig } from "./config.js";
 import { AuthMailer } from "./mailer.js";
-import { createSecretToken, hashPassword, hashToken, verifyPassword } from "./crypto.js";
+import { constantTimeEqual, createSecretToken, hashPassword, hashToken, verifyPassword } from "./crypto.js";
 
 const WEB_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const TUI_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const EMAIL_VERIFICATION_TTL_MS = 1000 * 60 * 60 * 24;
 const PASSWORD_RESET_TTL_MS = 1000 * 60 * 30;
+const SERVICE_TOKEN_USER_EMAIL = "admin@fusion.local";
 
 export type AuthClientKind = "web" | "tui";
 
@@ -306,6 +307,25 @@ export class AuthService {
     this.metadataStore.authSessions.touch({ id: session.id });
     return {
       session,
+      user,
+      workspace: this.ensurePersonalWorkspace(user)
+    };
+  }
+
+  authenticateServiceToken(token: string): AuthIdentity {
+    if (!this.config.serviceToken) {
+      throw new AuthError(401, "UNAUTHORIZED", "Service token authentication is disabled.");
+    }
+    const provided = hashToken(token, this.config.sessionSecret);
+    const expected = hashToken(this.config.serviceToken, this.config.sessionSecret);
+    if (!constantTimeEqual(provided, expected)) {
+      throw new AuthError(401, "UNAUTHORIZED", "Invalid service token.");
+    }
+    const user = this.metadataStore.users.findByEmail({ email: SERVICE_TOKEN_USER_EMAIL });
+    if (!user || user.disabled_at) {
+      throw new AuthError(401, "UNAUTHORIZED", "Service user is not provisioned.");
+    }
+    return {
       user,
       workspace: this.ensurePersonalWorkspace(user)
     };

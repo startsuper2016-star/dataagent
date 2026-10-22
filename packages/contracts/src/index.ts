@@ -307,6 +307,7 @@ export type EnvConfig = {
   api: {
     host: string;
     port: number;
+    service_token?: string;
   };
   llm: {
     provider: string;
@@ -339,6 +340,11 @@ export type EnvConfig = {
 export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
   { name: "API_HOST", required: false, default_value: "127.0.0.1", description: "Agent runtime bind host." },
   { name: "API_PORT", required: false, default_value: "8787", description: "Agent runtime bind port." },
+  {
+    name: "ONTOLOGY_SERVICE_TOKEN",
+    required: false,
+    description: "Bearer service token for headless ontology/automation API callers."
+  },
   {
     name: "LLM_PROVIDER",
     required: false,
@@ -382,7 +388,8 @@ export const ENV_VARIABLE_SPECS: EnvVariableSpec[] = [
 export const createEnvConfig = (env: Record<string, string | undefined>): EnvConfig => ({
   api: {
     host: env.API_HOST ?? "127.0.0.1",
-    port: Number.parseInt(env.API_PORT ?? "8787", 10)
+    port: Number.parseInt(env.API_PORT ?? "8787", 10),
+    ...(env.ONTOLOGY_SERVICE_TOKEN ? { service_token: env.ONTOLOGY_SERVICE_TOKEN } : {})
   },
   llm: {
     provider: env.LLM_PROVIDER ?? "openai-compatible",

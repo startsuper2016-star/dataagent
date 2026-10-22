@@ -274,7 +274,7 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       }
 
       const authContext = resolveRequestAuth(request, authService);
-      if (isUnsafeMethod(request.method)) {
+      if (isUnsafeMethod(request.method) && authContext.identity.session) {
         authService.validateCsrf(authContext.identity, headerString(request.headers["x-csrf-token"]));
       }
       removeLegacyBuiltinDemoDataSourceOnce(metadataStore, authContext.user.id);
@@ -1122,7 +1122,13 @@ const resolveRequestAuth = (
   request: IncomingMessage,
   authService: AuthService
 ): RequestAuthContext => {
-  const identity = resolvePasswordSessionIdentity(authService, request);
+  // Authorization: Bearer <ONTOLOGY_SERVICE_TOKEN> authenticates headless ontology/automation
+  // callers as the admin service identity (no session => no CSRF); otherwise fall back to the
+  // password session cookie path, which is unchanged.
+  const authorization = headerString(request.headers["authorization"]);
+  const identity = authorization?.startsWith("Bearer ")
+    ? authService.authenticateServiceToken(authorization.slice("Bearer ".length))
+    : resolvePasswordSessionIdentity(authService, request);
   return {
     identity,
     user: userRecordToMeResponse(identity.user),

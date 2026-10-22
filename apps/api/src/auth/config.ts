@@ -6,6 +6,7 @@ export type PasswordAuthConfig = {
   cookiePath: string;
   cookieSecure: boolean;
   sessionSecret: string;
+  serviceToken: string;
   emailDelivery: "smtp" | "test";
   smtp?: {
     from: string;
@@ -83,6 +84,7 @@ export function loadPasswordAuthConfig(env: Record<string, string | undefined>):
     cookiePath: "/",
     cookieSecure: false,
     sessionSecret: env.AUTH_SESSION_SECRET ?? "",
+    serviceToken: env.ONTOLOGY_SERVICE_TOKEN ?? "",
     emailDelivery: parseEmailDelivery(env.AUTH_EMAIL_DELIVERY)
   };
   if (env.SMTP_HOST || env.AUTH_SMTP_HOST) {
