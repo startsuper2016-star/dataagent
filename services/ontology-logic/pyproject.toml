@@ -44,6 +44,11 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
+[tool.ruff.lint.per-file-ignores]
+# sandbox.py 为元枢 function_runtime/sandbox.py 逐字移植（白名单表与 setitimer 恢复段）：
+# 保留原行长，避免转写走样破坏逐字移植判据。
+"src/ontology_logic/core/sandbox.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
