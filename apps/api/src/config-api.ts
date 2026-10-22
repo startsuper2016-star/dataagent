@@ -67,6 +67,7 @@ import {
   modelProfileTestSuccessReason
 } from "./model-profile-test.js";
 import { handleCapabilitiesRequest } from "./routes/capabilities.js";
+import { handleOntologyRequest } from "./routes/ontology.js";
 import type { ConfigApiContext, ConfigApiResponse } from "./routes/types.js";
 import {
   connectPolicyMcpClient,
@@ -197,6 +198,9 @@ const routeConfigRequest = async (
   }
   if (root === "capabilities") {
     return handleCapabilitiesRequest(request.method);
+  }
+  if (root === "ontology") {
+    return handleOntologyRequest(request, request.method, segments.slice(1), context);
   }
   if (root === "chat" && segments[1] === "uploads") {
     if (request.method !== "POST") {
