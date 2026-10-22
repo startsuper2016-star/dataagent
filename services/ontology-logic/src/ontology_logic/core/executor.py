@@ -108,6 +108,43 @@ def _coerce_params(params: dict, param_schemas: list) -> dict:
     return coerced
 
 
+def build_registered_function(callable_name: str) -> RegisteredFunction:
+    """registry.FUNCTIONS 的一条 FunctionSpec → 沙箱内联 RegisteredFunction。
+
+    元枢 inline 模式包裹：``def inline_function(params): result=None; <body>;
+    return result``（spc_kernel 的 BODY 是语句序列）。param_schemas 由
+    input_schema 生成，入参经 _coerce_params 类型收口。
+    """
+    spec = FUNCTIONS.get(callable_name)
+    if spec is None:
+        raise ValueError(f"未注册函数: {callable_name}")
+    return RegisteredFunction(
+        callable_name=callable_name,
+        func_name=INLINE_FUNC_NAME,
+        code=wrap_inline_body(spec.body),
+        param_schemas=tuple(
+            ParamSchema(
+                name=item["name"],
+                type=item.get("type", "string"),
+                required=bool(item.get("required", False)),
+                description=item.get("description", ""),
+            )
+            for item in spec.input_schema
+        ),
+    )
+
+
+def assemble_functions() -> dict[str, RegisteredFunction]:
+    """承接项③：全量装配函数注册表（一次性）——callable_name → RegisteredFunction。
+
+    供服务级单例构造时传入 FunctionRuntimeExecutor(functions=...)，此后
+    run_registered 不再在每次调用覆盖写 self.functions。
+    """
+    return {
+        callable_name: build_registered_function(callable_name) for callable_name in FUNCTIONS
+    }
+
+
 class FunctionRuntimeExecutor:
     def __init__(
         self,
@@ -302,39 +339,27 @@ class FunctionRuntimeExecutor:
     ) -> Any:
         """Execute one function from the static registry (functions.registry.FUNCTIONS).
 
-        MCP 工具层（Task 4 ``ontology_run_logic``）的执行入口：
+        MCP 工具层（``ontology_run_logic``）的执行入口：
 
-        - conn_or_none：预留形参（元枢离线 runner 的 sqlite conn 直连形态）；本部署
-          函数内数据访问一律经 query_callbacks（apps/api 回调实现），传 None 即可。
+        - conn_or_none：死参（承接项④）。元枢离线 runner 的 sqlite conn 直连形态
+          随 SQLAlchemy 侧裁剪已死，本部署函数内数据访问一律经 query_callbacks
+          （apps/api 回调实现）；assert None 显式拒绝误用。
         - query_callbacks：``{"query_objects", "call_complex_sql", "traverse"}`` 回调
           实现映射（与元枢 helper 同签名）；None 时回落 self.callbacks（HTTP 回调）。
-        - 包裹形态沿用元枢 inline 模式：``def inline_function(params): result=None;
-          <body>; return result``（spc_kernel 的 BODY 是语句序列）。
-        - 内联条目注册进 self.functions：call_function 递归与循环（CircularCallError）/
-          深度（MaxDepthError）守卫复用 execute() 同一链路，类型化异常原样穿透到
-          MCP 层；其余运行期异常收敛为 RuntimeError（携带 ExecResult.error 原文）。
+        - 承接项③：内联条目仅在实例缺失该 callable_name 时装配一次（服务级单例在
+          构造时经 assemble_functions() 全量装配，此处零写入），不再每次调用覆盖写
+          self.functions。
+        - 循环（CircularCallError）/深度（MaxDepthError）守卫复用 execute() 同一
+          链路，类型化异常原样穿透到 MCP 工具层（承接项①由工具层转 isError）；
+          其余运行期异常收敛为 RuntimeError（携带 ExecResult.error 原文）。
         - context：默认 None = 新调用链；编排/测试可传入共享 ExecContext 使跨函数
           调用链共享循环/深度/链超时状态。
         """
-        spec = FUNCTIONS.get(callable_name)
-        if spec is None:
-            raise ValueError(f"未注册函数: {callable_name}")
-        entry = RegisteredFunction(
-            callable_name=callable_name,
-            func_name=INLINE_FUNC_NAME,
-            code=wrap_inline_body(spec.body),
-            param_schemas=tuple(
-                ParamSchema(
-                    name=item["name"],
-                    type=item.get("type", "string"),
-                    required=bool(item.get("required", False)),
-                    description=item.get("description", ""),
-                )
-                for item in spec.input_schema
-            ),
-        )
-        # 注册进进程内注册表（幂等覆盖）：同链 call_function 递归与守卫复用 execute()。
-        self.register(entry)
+        # 承接项④：死参显式拒绝（元枢离线 runner 的 conn 直连形态不随迁）。
+        assert conn_or_none is None, "conn_or_none 已裁剪：独立侧车数据访问走 apps/api 回调，传 None"
+        if callable_name not in self.functions:
+            # 承接项③：每实例至多装配一次（单例已在构造时全量装配，不会走到这里）。
+            self.register(build_registered_function(callable_name))
         result = self.execute(callable_name, params, context, query_callbacks=query_callbacks)
         if not result.success:
             error = RuntimeError(result.error or "函数执行失败")

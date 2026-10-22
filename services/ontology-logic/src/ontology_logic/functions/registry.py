@@ -94,3 +94,46 @@ FUNCTIONS: dict[str, FunctionSpec] = {
         ),
     )
 }
+
+
+# --- 承接项②：MCP/REST 工具层参数校验（validate_parameters 职责的落点） --------------
+
+_TYPE_CHECKS: dict[str, tuple[type, str]] = {
+    # 类型粗校验只覆盖 string/array（三函数 input_schema 仅出现这两类声明）。
+    "string": (str, "string"),
+    "str": (str, "string"),
+    "text": (str, "string"),
+    "array": (list, "array"),
+    "list": (list, "array"),
+}
+
+
+def validate_logic_params(logic_name: str, params: dict) -> str | None:
+    """按 FunctionSpec.input_schema 校验工具入参，返回错误消息（None = 通过）。
+
+    MCP 工具注册层（``ontology_run_logic``）与 REST 面（``/run_logic``）共用：
+    - logic_name 未注册 → ``未注册函数: X``；
+    - required 参数缺失（或显式 null）→ ``缺少必填参数 X``（多项以"；"连接）；
+    - string/array 类型粗校验失败 → ``参数 X 类型错误: 期望 <t>，实为 <实际类型>``。
+    错误消息经 MCP isError content 原样透传，供 LLM 自纠。
+    """
+    spec = FUNCTIONS.get(logic_name)
+    if spec is None:
+        return f"未注册函数: {logic_name}"
+    missing = [
+        item["name"]
+        for item in spec.input_schema
+        if item.get("required") and params.get(item["name"]) is None
+    ]
+    if missing:
+        return "；".join(f"缺少必填参数 {name}" for name in missing)
+    for item in spec.input_schema:
+        value = params.get(item["name"])
+        if value is None:
+            continue
+        declared = str(item.get("type") or "").lower()
+        check = _TYPE_CHECKS.get(declared)
+        if check is not None and not isinstance(value, check[0]):
+            expected = check[1]
+            return f"参数 {item['name']} 类型错误: 期望 {expected}，实为 {type(value).__name__}"
+    return None

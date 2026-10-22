@@ -1,8 +1,17 @@
 """ontology-logic MCP server — expose the logic sandbox as MCP tools.
 
-Default surface: ontology_ping (connectivity echo) only, following the
-datalink mcp/server.py registration pattern. Real tools (ontology_run_logic,
-ontology_query) are registered alongside it in later Phase 2 tasks.
+Tools (Phase 2 Task 4):
+- ontology_ping: connectivity echo.
+- ontology_run_logic: run one registered logic function (spc_detect/rca_rank/
+  rca_evidence) through the sandbox executor (executor.run_registered), returning
+  the JSON result as content.
+- ontology_query: query entity rows via the apps/api HTTP callback
+  (POST /api/v1/ontology/query), returning row data.
+
+错误面（T2 评审承接项①②）：
+- CircularCallError / MaxDepthError → isError content，错误消息原样透传（供 LLM 自纠）；
+- 参数校验（validate_logic_params，按 FunctionSpec.input_schema）→ isError content；
+- 未注册 logic / 回调失败（RuntimeError）→ isError content。
 
 Transport: streamable-http by default (same family as datalink's
 streamable-http mode), stdio available via ONTOLOGY_LOGIC_MCP_TRANSPORT.
@@ -10,15 +19,43 @@ streamable-http mode), stdio available via ONTOLOGY_LOGIC_MCP_TRANSPORT.
 Run with: uv run python -m ontology_logic.mcp.server
 """
 
+import json
 import logging
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 
-from ontology_logic.api.deps import get_config
+from ontology_logic.api.deps import get_config, get_executor
+from ontology_logic.core.executor import CircularCallError, MaxDepthError
+from ontology_logic.functions.registry import validate_logic_params
 
 logger = logging.getLogger(__name__)
 
+# logic_name 的 enum 面（与 registry.FUNCTIONS 一致；运行期另有未注册防御）。
+LogicName = Literal["spc_detect", "rca_rank", "rca_evidence"]
+
 mcp = FastMCP("ontology-logic")
+
+
+# --- 结果面（isError content 承接项①：消息原样透传，不加前缀） --------------------
+
+
+def _json_result(payload) -> CallToolResult:
+    """成功面：JSON 结果作为 text content 返回（isError=False）。"""
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
+        isError=False,
+    )
+
+
+def _error_result(message: str) -> CallToolResult:
+    """isError content：错误消息原样透传（CircularCallError/MaxDepthError/
+    参数校验/未注册/回调失败），供 LLM 读取后自纠。"""
+    return CallToolResult(content=[TextContent(type="text", text=message)], isError=True)
+
+
+# --- 工具 -----------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -29,6 +66,67 @@ def ontology_ping() -> dict:
     transport wiring before calling real logic tools.
     """
     return {"pong": True, "service": "ontology-logic"}
+
+
+@mcp.tool()
+def ontology_run_logic(logic_name: LogicName, params: dict | None = None) -> CallToolResult:
+    """Run one registered SPC/RCA logic function in the sandbox and return its JSON result.
+
+    Args:
+        logic_name: One of "spc_detect" (SPC 离群检测锚定，输出 {anchor})、
+            "rca_rank" (根因候选因子统计排名，输出 {ranking, top1, ...})、
+            "rca_evidence" (根因证据评分与门控，输出 {conclusion, confidence, gate, ...}；
+            需在 params.candidates 传入 rca_rank 输出的 ranking 列表).
+        params: 函数入参对象（可选；rca_evidence 必填 candidates）。
+
+    Returns:
+        JSON 结果 content；错误时 isError content（消息原样，可直接自纠）。
+    """
+    payload = dict(params or {})
+    # 承接项②：按 FunctionSpec.input_schema 做 required/类型校验（未注册同口径）。
+    invalid = validate_logic_params(logic_name, payload)
+    if invalid is not None:
+        return _error_result(invalid)
+    try:
+        result = get_executor().run_registered(None, logic_name, payload)
+    except (CircularCallError, MaxDepthError) as err:
+        # 承接项①：循环/深度守卫错误原样透传（供 LLM 自纠）。
+        logger.warning("ontology_run_logic(%s) guard error: %s", logic_name, err)
+        return _error_result(str(err))
+    except (ValueError, RuntimeError) as err:
+        # 未注册函数 / 函数执行失败（含 D5 回调失败）→ isError 原文。
+        logger.warning("ontology_run_logic(%s) failed: %s", logic_name, err)
+        return _error_result(str(err))
+    return _json_result(result)
+
+
+@mcp.tool()
+def ontology_query(
+    entity: str,
+    filters: dict | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> CallToolResult:
+    """Query rows of one ontology entity through the apps/api HTTP callback.
+
+    Args:
+        entity: 实体名（如 AnomWafer、RcaDaily、ToolEvent）。
+        filters: 等值/范围过滤条件（如 {"lot_id": "L1"}、{"stat_date": {"gte": "2026-09-21"}}）。
+        limit: 返回行数上限（默认 100）。
+        offset: 翻页偏移（默认 0）。
+
+    Returns:
+        {"rows": [dict], "rowCount": n}；回调失败时 isError content（D5 原文）。
+    """
+    try:
+        rows = get_executor().callbacks.query_rows(
+            entity, filters or {}, limit=limit, offset=offset
+        )
+    except RuntimeError as err:
+        # 回调失败（D5 契约：超时/非 200/错误信封）→ isError 原文透传。
+        logger.warning("ontology_query(%s) failed: %s", entity, err)
+        return _error_result(str(err))
+    return _json_result({"rows": rows, "rowCount": len(rows)})
 
 
 def start_mcp_server(host: str = "", port: int = 0, transport: str = "") -> None:

@@ -12,12 +12,41 @@ D5 契约：**硬超时 + 失败即抛 RuntimeError + 绝不重试**。
 - POST /api/v1/ontology/sql      {sql, params?}                      → {columns, rows, rowCount}
 - POST /api/v1/ontology/traverse {fromEntity, fromFilters?, toEntity, limit?} → {columns, rows, rowCount}
 响应包裹（@datafoundry/contracts）：``{success: true, data}`` | ``{success: false, error: {code, message}}``
+
+Task 4 适配：``adapt_named_params`` 把元枢内核的命名参数（``:ws`` + ``{"ws": ...}``）
+确定性改名为 apps/api SQL 路由要求的 ``p<N>`` 键白名单形态（execute_sql 出口处生效）。
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
+
+# apps/api /ontology/sql 的内联参数键白名单（packages/ontology inline-params.ts）。
+_P_KEY_RE = re.compile(r"^p\d+(_\d+)?$")
+
+
+def adapt_named_params(sql: str, params: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:
+    """元枢内核命名参数 → fusion ``/ontology/sql`` p<N> 白名单契约适配。
+
+    元枢统计内核（spc_kernel，字节锁死）以命名占位符下发 SQL（如
+    ``WHERE process_date < :ws`` + ``{"ws": ...}``）；apps/api 的 SQL 路由
+    （executeOntologySql→inlineParams）只接受 ``p<N>[_<M>]`` 形态的键。
+    这里做确定性改名：键按字典序映射为 p1..pN，SQL 中对应 ``:key`` 词边界
+    占位符同步重写；键已全部符合契约时原样返回。表名重写（实体名→物理表）
+    由 apps/api 侧负责，不经此处。
+    """
+    if not params:
+        return sql, {}
+    keys = list(params.keys())
+    if all(_P_KEY_RE.match(key) for key in keys):
+        return sql, params
+    rename = {key: f"p{i}" for i, key in enumerate(sorted(keys), start=1)}
+    alternation = "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+    pattern = re.compile(rf":(?:{alternation})\b")
+    adapted_sql = pattern.sub(lambda m: ":" + rename[m.group(0)[1:]], sql)
+    return adapted_sql, {rename[key]: params[key] for key in keys}
 
 
 def _rows_as_dicts(data: Any) -> list[dict]:
@@ -94,8 +123,12 @@ class OntologyCallbackClient:
         return _rows_as_dicts(data)
 
     def execute_sql(self, sql: str, params: dict | None = None) -> dict:
-        """POST /api/v1/ontology/sql → {columns, rows, rowCount}（行不做字典化）。"""
-        data = self._post("/api/v1/ontology/sql", {"sql": sql, "params": params or {}})
+        """POST /api/v1/ontology/sql → {columns, rows, rowCount}（行不做字典化）。
+
+        命名参数经 adapt_named_params 适配 apps/api 的 p<N> 键白名单（见上）。
+        """
+        adapted_sql, adapted_params = adapt_named_params(sql, params)
+        data = self._post("/api/v1/ontology/sql", {"sql": adapted_sql, "params": adapted_params})
         return data if isinstance(data, dict) else {}
 
     def traverse_rows(

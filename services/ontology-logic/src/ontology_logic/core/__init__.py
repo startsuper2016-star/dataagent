@@ -18,6 +18,8 @@ from ontology_logic.core.executor import (
     FunctionRuntimeExecutor,
     MaxDepthError,
     RegisteredFunction,
+    assemble_functions,
+    build_registered_function,
 )
 from ontology_logic.core.models import (
     DEFAULT_MAX_DEPTH,
@@ -47,4 +49,6 @@ __all__ = [
     "RegisteredFunction",
     "UnifiedSandbox",
     "ValidationResult",
+    "assemble_functions",
+    "build_registered_function",
 ]

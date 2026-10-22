@@ -6,6 +6,6 @@
   与元枢 grounding 注册值一致，供 executor.run_registered 与 MCP 工具层消费。
 """
 
-from ontology_logic.functions.registry import FUNCTIONS, FunctionSpec
+from ontology_logic.functions.registry import FUNCTIONS, FunctionSpec, validate_logic_params
 
-__all__ = ["FUNCTIONS", "FunctionSpec"]
+__all__ = ["FUNCTIONS", "FunctionSpec", "validate_logic_params"]
