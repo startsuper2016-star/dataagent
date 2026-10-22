@@ -1,0 +1,49 @@
+[project]
+name = "ontology-logic"
+version = "0.1.0"
+description = "Python logic sidecar for DataFoundry ontology — statistics kernel + function sandbox exposed via MCP."
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    { name = "DataFoundry Team" },
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    # Datalink (services/datalink) runs the mcp 1.x SDK line — stay on the
+    # same major so FastMCP registration/transport behavior matches its
+    # mcp/server.py pattern.
+    "mcp>=1.0,<2",
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ontology_logic"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
