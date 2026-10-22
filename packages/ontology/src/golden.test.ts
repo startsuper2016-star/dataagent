@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { objectQuery } from "./query.js";
 import type { Binding } from "./bindings.js";
 import type { Filters } from "./dsl.js";
@@ -43,7 +43,10 @@ function bindingFor(table: string, columns: string[]): Binding {
 }
 
 describe.skipIf(!HAS_DB)("golden cases 1-12 (objectQuery: eq_chamber..total_count_matches_pages)", () => {
-  const conn = new DatabaseSync(SPC_DB);
+  // 连接必须懒建（beforeAll）：describe 工厂在收集期无条件执行，
+  // DB 不在的机器（CI）上急建会直接 ERR_SQLITE_ERROR 而非走 skipIf 跳过
+  let conn: DatabaseSync;
+  beforeAll(() => { conn = new DatabaseSync(SPC_DB); });
 
   for (const g of GOLDEN.cases.slice(0, 11)) {
     const c = CASES[g.name];

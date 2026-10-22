@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { executeOntologySql, rewriteObjectNames } from "./ontology-sql.js";
 import type { Binding } from "./bindings.js";
 
@@ -41,20 +41,26 @@ describe("rewriteObjectNames", () => {
 });
 
 describe.skipIf(!HAS_DB)("executeOntologySql — golden cases 13-20", () => {
-  const conn = new DatabaseSync(SPC_DB);
+  // 连接与绑定都必须懒建（beforeAll）：describe 工厂在收集期无条件执行，
+  // DB 不在的机器（CI）上急建会直接 ERR_SQLITE_ERROR 而非走 skipIf 跳过
+  let conn: DatabaseSync;
+  let BINDINGS: Record<string, Binding>;
 
-  // 对象名→物理表（与 Task 6 迁移后的 ont_bindings 同构；物理列=属性名同名）
-  const BINDINGS: Record<string, Binding> = Object.fromEntries(
-    ([
-      ["WaferFact", "v_wafer_agg"], ["ToolEvent", "dim_tool_event"],
-      ["RcaChamberComp", "v_chamber_comp"], ["RcaFdcGroup", "v_fdc_group"],
-      ["RcaFdcCorr", "v_fdc_corr"], ["AnomLot", "v_anom_lot"],
-      ["AnomWafer", "v_anom_wafer"], ["RcaDaily", "v_day_flag"],
-    ] as [string, string][]).map(([entity, table]) => [entity, {
-      datasourceId: "spc", table, idColumn: "id", status: "approved",
-      fieldMap: colMapFor(table),
-    }]),
-  );
+  beforeAll(() => {
+    conn = new DatabaseSync(SPC_DB);
+    // 对象名→物理表（与 Task 6 迁移后的 ont_bindings 同构；物理列=属性名同名）
+    BINDINGS = Object.fromEntries(
+      ([
+        ["WaferFact", "v_wafer_agg"], ["ToolEvent", "dim_tool_event"],
+        ["RcaChamberComp", "v_chamber_comp"], ["RcaFdcGroup", "v_fdc_group"],
+        ["RcaFdcCorr", "v_fdc_corr"], ["AnomLot", "v_anom_lot"],
+        ["AnomWafer", "v_anom_wafer"], ["RcaDaily", "v_day_flag"],
+      ] as [string, string][]).map(([entity, table]) => [entity, {
+        datasourceId: "spc", table, idColumn: "id", status: "approved",
+        fieldMap: colMapFor(table),
+      }]),
+    );
+  });
 
   it("rejects sql with no ontology reference", () => {
     expect(() => executeOntologySql(conn, BINDINGS, "SELECT * FROM sqlite_master")).toThrow(/白名单/);

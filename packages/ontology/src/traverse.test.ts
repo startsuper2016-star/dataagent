@@ -134,7 +134,10 @@ const GOLDEN_BINDINGS: Record<string, Binding> = {
 };
 
 describe.skipIf(!HAS_DB)("traverse golden parity (cases 12-13)", () => {
-  const conn = new DatabaseSync(SPC_DB);
+  // 连接必须懒建（beforeAll）：describe 工厂在收集期无条件执行，
+  // DB 不在的机器（CI）上急建会直接 ERR_SQLITE_ERROR 而非走 skipIf 跳过
+  let conn: DatabaseSync;
+  beforeAll(() => { conn = new DatabaseSync(SPC_DB); });
 
   // golden SQL: SELECT DISTINCT t.id, t.eqp_id, t.chamber_id, t.event_type, t.event_start
   //             FROM v_anom_wafer a JOIN dim_tool_event t ON a.chamber_id = t.chamber_id ORDER BY t.id
