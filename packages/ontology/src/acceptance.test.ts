@@ -22,13 +22,12 @@ import type { RelationEdge } from "./traverse.js";
  * 列对齐方式（如实记录）：objectQuery/traverse 按契约投影 fieldMap 全列（键序=元枢映射序），
  * golden expectedColumns 是其子集且顺序可能不同 —— 本验收**按列名对齐**：对每条 golden 期望列
  * 在返回列中 indexOf 取值、重排为 golden 列序后再与 expectedRows 深比较，不依赖列位置。
- * （对齐的前提不变量「属性名 == 物理列名」在 beforeAll 对全部 14 绑定逐条断言，违反即迁移数据
- * 问题，直接失败，不静默绕过。）
  *
- * fieldMap 规范化（如实记录）：迁移契约是 field_mappings_json **原样拷贝**元枢 object_bindings
- * （数组形态 [{attribute_id, source_column, transform}]，Task 7 迁移脚本 + 抽样断言所固化），
- * 与 Task 4 fixture 的 Record 形态不同；resolveBinding 负责行级事实（table/id_column/datasource/
- * status，缺绑定即抛错），attribute_id→属性名 的还原经 ont_attributes 在本测试装置完成。
+ * fieldMap 规范化（phase1b Task 2 已下沉源码）：迁移契约是 field_mappings_json **原样拷贝**元枢
+ * object_bindings（数组形态 [{attribute_id, source_column, transform}]），与手工契约的 Record 形态
+ * 不同；resolveBinding 内部经 ont_attributes（WHERE entity_id）把 attribute_id 还原为属性名并统一
+ * 输出 Record<属性名, 物理列>。本验收因此**直出** resolveBinding 结果，不再装置内还原
+ * （T8 期间的临时还原+同名不变量断言已删除）——规范化若有回归，golden 端到端深比较会响亮失败。
  */
 
 const GOLDEN = JSON.parse(readFileSync(new URL("../test/golden/golden.json", import.meta.url), "utf-8")) as {
@@ -74,8 +73,7 @@ if (HAS_WORKBENCH && !READY) {
   });
 }
 
-// 元枢 field_mappings 原样条目（数组形态）
-type YuanShuMapping = { attribute_id: string; source_column: string; transform?: unknown };
+// 元枢 field_mappings 的数组形态已由 bindings.ts 的 normalizeFieldMap 规范化，本文件不再感知其内部结构。
 
 /**
  * 列名对齐：把 resultColumns/resultRows（fieldMap 全列，元枢序）重排为 wanted（golden 列序）。
@@ -127,10 +125,6 @@ describe.skipIf(!READY)("acceptance — workbench 真实绑定 × golden 复跑�
     const approved = (wb.prepare("SELECT COUNT(*) AS n FROM ont_bindings WHERE status = 'approved'").get() as { n: number }).n;
     if (approved !== 14) throw new Error(`ont_bindings approved 期望 14，实际 ${approved}（迁移数据问题）`);
 
-    const attrNameById = new Map<string, string>();
-    for (const a of wb.prepare("SELECT id, name FROM ont_attributes").all() as Array<{ id: string; name: string }>)
-      attrNameById.set(a.id, a.name);
-
     const bound = wb.prepare(
       "SELECT e.name AS name, e.id AS id FROM ont_entities e JOIN ont_bindings b ON b.entity_id = e.id "
       + "WHERE b.status = 'approved' ORDER BY e.name",
@@ -138,22 +132,12 @@ describe.skipIf(!READY)("acceptance — workbench 真实绑定 × golden 复跑�
     if (bound.length !== 14) throw new Error(`可解析绑定实体期望 14，实际 ${bound.length}（迁移数据问题）`);
 
     for (const { name, id } of bound) {
-      const rb = resolveBinding(wb, id); // Task 4：行级事实读自 ont_bindings；无 approved 绑定即抛
+      // 直出规范化绑定：resolveBinding 内部经 ont_attributes（WHERE entity_id）还原属性名，
+      // 数组形态而映射数据不完整时显式抛错（normalizeFieldMap 的守卫）。
+      const rb = resolveBinding(wb, id);
       if (rb.datasourceId !== dsId) throw new Error(`${name} 绑定的数据源 ${rb.datasourceId} 不是 SPC_MVP_SQLITE`);
-      // resolveBinding 的 fieldMap 是元枢原样数组（迁移契约"原样拷贝"），经 ont_attributes 还原属性名
-      const raw: unknown = rb.fieldMap;
-      if (!Array.isArray(raw)) throw new Error(`${name} 的 field_mappings_json 不是元枢数组形态（迁移数据问题）`);
-      const fieldMap: Record<string, string> = {};
-      for (const m of raw as YuanShuMapping[]) {
-        const attrName = attrNameById.get(m.attribute_id);
-        if (!attrName) throw new Error(`${name} 映射的 attribute_id ${m.attribute_id} 在 ont_attributes 缺失（迁移数据问题）`);
-        if (attrName !== m.source_column) {
-          throw new Error(`${name} 属性 ${attrName} 与物理列 ${m.source_column} 不同名，列名对齐前提被破坏（迁移数据问题）`);
-        }
-        fieldMap[attrName] = m.source_column;
-      }
-      if (Object.keys(fieldMap).length === 0) throw new Error(`${name} 绑定没有可查询的已映射属性`);
-      BIND[name] = { datasourceId: rb.datasourceId, table: rb.table, idColumn: rb.idColumn, fieldMap, status: rb.status };
+      if (Object.keys(rb.fieldMap).length === 0) throw new Error(`${name} 绑定没有可查询的已映射属性（迁移数据问题）`);
+      BIND[name] = rb;
     }
 
     // ---- ③ 真实关系：ont_relations（source_field/target_field 完整才可走，与 traverse 契约一致）----
