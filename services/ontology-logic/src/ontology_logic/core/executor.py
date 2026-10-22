@@ -356,7 +356,9 @@ class FunctionRuntimeExecutor:
           调用链共享循环/深度/链超时状态。
         """
         # 承接项④：死参显式拒绝（元枢离线 runner 的 conn 直连形态不随迁）。
-        assert conn_or_none is None, "conn_or_none 已裁剪：独立侧车数据访问走 apps/api 回调，传 None"
+        # 用 ValueError 而非 assert：-O 模式下 assert 会被剥除，守卫失效。
+        if conn_or_none is not None:
+            raise ValueError("conn_or_none 已裁剪：独立侧车数据访问走 apps/api 回调，传 None")
         if callable_name not in self.functions:
             # 承接项③：每实例至多装配一次（单例已在构造时全量装配，不会走到这里）。
             self.register(build_registered_function(callable_name))

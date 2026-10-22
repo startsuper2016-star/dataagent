@@ -307,12 +307,12 @@ def test_run_registered_fresh_executor_assembles_once():
 
 
 def test_run_registered_conn_none_assert():
-    """承接项④：conn_or_none 死参 assert None（误传 conn 显式拒绝）。"""
+    """承接项④：conn_or_none 死参显式拒绝（误传 conn 抛 ValueError，-O 下不失效）。"""
     reset_executor()
     try:
         executor = get_executor()
         executor.callbacks = FakeCallbackClient(DETECT_TABLES, BASELINE)
-        with pytest.raises(AssertionError, match="conn_or_none"):
+        with pytest.raises(ValueError, match="conn_or_none"):
             executor.run_registered(object(), "spc_detect", {})
     finally:
         reset_executor()

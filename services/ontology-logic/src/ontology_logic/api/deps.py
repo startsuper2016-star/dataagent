@@ -6,6 +6,7 @@ the service-level executor singleton wired once (承接项③) — sandbox +
 apps/api HTTP callback client + fully assembled function registry.
 """
 
+import threading
 from functools import lru_cache
 
 from ontology_logic.config import OntologyLogicConfig
@@ -27,30 +28,36 @@ def reset_config() -> None:
 
 # 服务级单例（承接项③）：进程内唯一执行器。构造时一次性装配函数注册表
 # （assemble_functions），MCP 工具层与 REST 面共享，均不在每次调用覆盖写。
+# 双检 + threading.Lock：封死并发首调（REST/MCP 两入口同时冷启动）下的
+# 双重构造竞态——后到线程持锁复检，直接复用先到线程已建好的单例。
 _executor: FunctionRuntimeExecutor | None = None
+_executor_lock = threading.Lock()
 
 
 def get_executor() -> FunctionRuntimeExecutor:
     """Return the process-wide executor singleton (built lazily from config)."""
     global _executor
     if _executor is None:
-        config = get_config()
-        callbacks = OntologyCallbackClient(
-            api_base_url=config.api.api_base_url,
-            service_token=config.api.service_token,
-            timeout_seconds=config.api.callback_timeout_seconds,
-        )
-        _executor = FunctionRuntimeExecutor(
-            sandbox=UnifiedSandbox(),
-            callbacks=callbacks,
-            functions=assemble_functions(),
-        )
+        with _executor_lock:
+            if _executor is None:
+                config = get_config()
+                callbacks = OntologyCallbackClient(
+                    api_base_url=config.api.api_base_url,
+                    service_token=config.api.service_token,
+                    timeout_seconds=config.api.callback_timeout_seconds,
+                )
+                _executor = FunctionRuntimeExecutor(
+                    sandbox=UnifiedSandbox(),
+                    callbacks=callbacks,
+                    functions=assemble_functions(),
+                )
     return _executor
 
 
 def reset_executor() -> None:
     """Drop the executor singleton, closing its HTTP callback pool (tests/env reload)."""
     global _executor
-    if _executor is not None:
-        _executor.callbacks.close()
-        _executor = None
+    with _executor_lock:
+        if _executor is not None:
+            _executor.callbacks.close()
+            _executor = None
