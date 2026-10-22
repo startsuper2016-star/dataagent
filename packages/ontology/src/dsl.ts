@@ -6,7 +6,7 @@ const OP_SQL: Record<string, string> = { eq: "=", neq: "<>", gt: ">", gte: ">=",
 export function* iterFilterConditions(filters: Filters): Generator<[string, Op, unknown]> {
   for (const [name, value] of Object.entries(filters ?? {})) {
     if (value !== null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0) {
-      const unknown = Object.keys(value).filter(k => !FILTER_OPS.includes(k as Op));
+      const unknown = Object.keys(value).filter(k => !FILTER_OPS.includes(k as Op)).sort();
       if (unknown.length) throw new Error(`不支持的过滤操作符: ${unknown.join(", ")}`);
       for (const [op, v] of Object.entries(value)) yield [name, op as Op, v];
     } else {
@@ -46,7 +46,7 @@ export function matchSingle(value: unknown, op: Op, cond: unknown): boolean {
 
 export function matchFilterValue(value: unknown, condition: unknown): boolean {
   if (condition !== null && typeof condition === "object" && !Array.isArray(condition) && Object.keys(condition).length > 0) {
-    const unknown = Object.keys(condition).filter(k => !FILTER_OPS.includes(k as Op));
+    const unknown = Object.keys(condition).filter(k => !FILTER_OPS.includes(k as Op)).sort();
     if (unknown.length) throw new Error(`不支持的过滤操作符: ${unknown.join(", ")}`);
     return Object.entries(condition).every(([op, v]) => matchSingle(value, op as Op, v));
   }
@@ -60,20 +60,20 @@ export function buildWhere(fieldMap: Record<string, string>, filters: Filters): 
   for (const [attr, op, value] of iterFilterConditions(filters)) {
     const col = fieldMap[attr];
     if (!col) throw new Error(`属性未定义或未绑定: ${attr}`);
+    const n = i; i += 1;   // 每条件无条件推进序号，对齐 Python enumerate 语义（is_null/not_null 占号不占参）
     const quoted = `"${col}"`;
     if (op === "is_null") { where.push(`${quoted} IS NULL`); continue; }
     if (op === "not_null") { where.push(`${quoted} IS NOT NULL`); continue; }
     if (op === "in" || op === "not_in") {
       const values = Array.isArray(value) ? value : [value];
       if (values.length === 0) { where.push(op === "in" ? "1 = 0" : "1 = 1"); continue; }
-      const keys = values.map((v, j) => { const key = `p${i}_${j}`; params[key] = v; return `:${key}`; });
+      const keys = values.map((v, j) => { const key = `p${n}_${j}`; params[key] = v; return `:${key}`; });
       where.push(`${quoted} ${op === "in" ? "IN" : "NOT IN"} (${keys.join(", ")})`);
       continue;
     }
-    const key = `p${i}`;
+    const key = `p${n}`;
     params[key] = value;
     where.push(`${quoted} ${OP_SQL[op]} :${key}`);
-    i += 1;
   }
   return { where, params };
 }
