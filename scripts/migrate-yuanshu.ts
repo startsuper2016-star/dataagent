@@ -277,7 +277,12 @@ try {
     insRel.run(r.id, r.from_entity_id, r.to_entity_id, r.name, r.rel_type, r.cardinality, r.source_field, r.target_field, r.description);
 
   // --- datasources：不存在则建（放在事务内，绑定行要引用其 id） ---
-  const existingDs = wb.prepare("SELECT id FROM data_sources WHERE name = ?").get(DS_NAME) as
+  // T4 评审 Low-2：复用判定对齐 DataSourceRepository.list({ enabled_only: true }) 口径
+  // （status = 'ready'）——默认口径（status <> 'deleted'）会让 disabled/failed 状态行漏过，
+  // 裸 SQL 原实现连 deleted 墓碑行也会命中复用。
+  const existingDs = wb
+    .prepare("SELECT id FROM data_sources WHERE name = ? AND status = 'ready'")
+    .get(DS_NAME) as
     | { id: string }
     | undefined;
   let dsId: string;
