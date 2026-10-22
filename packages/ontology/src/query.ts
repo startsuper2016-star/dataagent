@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { buildWhere } from "./dsl.js";
 import type { Filters } from "./dsl.js";
 import type { Binding } from "./bindings.js";
@@ -23,7 +23,7 @@ export function objectQuery(
   const lim = Math.max(1, Math.min(Math.trunc(Number(limit)) || 20, MAX_ROWS));
   const off = Math.max(0, Math.trunc(Number(offset)) || 0);
   sql += ` LIMIT ${lim} OFFSET ${off}`;
-  const rows = (conn.prepare(sql).all(...params) as Record<string, unknown>[])
+  const rows = (conn.prepare(sql).all(...(params as SQLInputValue[])) as Record<string, unknown>[])
     .map(r => cols.map(c => r[c] ?? null));
   return { columns: cols, rows, rowCount: rows.length };
 }

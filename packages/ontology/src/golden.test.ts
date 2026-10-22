@@ -47,6 +47,7 @@ describe.skipIf(!HAS_DB)("golden cases 1-12 (objectQuery: eq_chamber..total_coun
 
   for (const g of GOLDEN.cases.slice(0, 11)) {
     const c = CASES[g.name];
+    if (!c) throw new Error(`golden case 未找到: ${g.name}`);
     it(g.name, () => {
       const b = bindingFor(c.table, g.expectedColumns);
       const rows = c.pages.flatMap(([limit, offset]) => objectQuery(conn, b, c.filters, limit, offset).rows);

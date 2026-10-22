@@ -7,9 +7,9 @@ export function rewriteObjectNames(
 ): { sql: string; referenced: string[] } {
   let out = sql;
   const referenced: string[] = [];
-  for (const name of Object.keys(nameToTable).sort((a, b) => b.length - a.length)) {
+  for (const [name, table] of Object.entries(nameToTable).sort(([a], [b]) => b.length - a.length)) {
     const re = new RegExp(`(?<![\\p{L}\\p{N}_.])${name}(?![\\p{L}\\p{N}_])`, "gu");
-    if (re.test(out)) { referenced.push(name); out = out.replace(re, nameToTable[name]); }
+    if (re.test(out)) { referenced.push(name); out = out.replace(re, table); }
   }
   return { sql: out, referenced };
 }

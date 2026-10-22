@@ -5,7 +5,7 @@ export type Binding = {
   table: string;
   idColumn: string;
   fieldMap: Record<string, string>;
-  sourceSql?: string;
+  sourceSql?: string | undefined;
   status: string;
 };
 

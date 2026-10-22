@@ -45,12 +45,12 @@ describe.skipIf(!HAS_DB)("executeOntologySql — golden cases 13-20", () => {
 
   // 对象名→物理表（与 Task 6 迁移后的 ont_bindings 同构；物理列=属性名同名）
   const BINDINGS: Record<string, Binding> = Object.fromEntries(
-    [
+    ([
       ["WaferFact", "v_wafer_agg"], ["ToolEvent", "dim_tool_event"],
       ["RcaChamberComp", "v_chamber_comp"], ["RcaFdcGroup", "v_fdc_group"],
       ["RcaFdcCorr", "v_fdc_corr"], ["AnomLot", "v_anom_lot"],
       ["AnomWafer", "v_anom_wafer"], ["RcaDaily", "v_day_flag"],
-    ].map(([entity, table]) => [entity, {
+    ] as [string, string][]).map(([entity, table]) => [entity, {
       datasourceId: "spc", table, idColumn: "id", status: "approved",
       fieldMap: colMapFor(table),
     }]),
