@@ -85,6 +85,8 @@ export const handleOntologyRequest = async (
         return await handleTraverse(request, method, context);
       case "bindings":
         return handleBindings(method, context.metadataStore.db);
+      case "context":
+        return handleContext(method, context.metadataStore.db);
       default:
         throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知本体端点: ${subPath[0] ?? ""}`);
     }
@@ -168,6 +170,43 @@ const handleBindings = (method: string | undefined, db: DatabaseSync): ConfigApi
     )
     .all();
   return ok({ bindings: rows });
+};
+
+const handleContext = (method: string | undefined, db: DatabaseSync): ConfigApiResponse => {
+  requireMethod(method, "GET");
+  const bindings = db
+    .prepare(
+      `SELECT e.name AS entity, b.table_name AS "table", b.id_column AS id_column,
+              b.field_mappings_json AS field_mappings, b.status AS status
+       FROM ont_bindings b JOIN ont_entities e ON e.id = b.entity_id
+       WHERE b.status = 'approved' ORDER BY e.name`
+    )
+    .all();
+  const relations = db
+    .prepare(
+      `SELECT r.name AS name, ef.name AS from_entity, et.name AS to_entity,
+              r.cardinality AS cardinality, r.source_field AS source_field,
+              r.target_field AS target_field
+       FROM ont_relations r
+       JOIN ont_entities ef ON ef.id = r.from_entity_id
+       JOIN ont_entities et ON et.id = r.to_entity_id
+       ORDER BY ef.name, r.name`
+    )
+    .all();
+  const functions = db
+    .prepare(
+      `SELECT callable_name, description, input_schema_json
+       FROM ont_functions WHERE status = 'active' ORDER BY callable_name`
+    )
+    .all()
+    .map((row: Record<string, unknown>) => ({
+      callable_name: row.callable_name,
+      description: row.description,
+      input_schema: typeof row.input_schema_json === "string"
+        ? JSON.parse(row.input_schema_json as string)
+        : row.input_schema_json,
+    }));
+  return ok({ bindings, relations, functions });
 };
 
 // --- 数据连接与元数据读取 ----------------------------------------------------------
