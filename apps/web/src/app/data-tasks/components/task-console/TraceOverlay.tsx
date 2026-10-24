@@ -266,8 +266,8 @@ export function TraceOverlay({
       <section className="grid gap-3 rounded-lg border border-border bg-surface p-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-foreground">Trace DAG</h3>
-            <p className="mt-0.5 text-[11px] text-muted-light">Semantic task sections and checkpoint lineage.</p>
+            <h3 className="text-sm font-semibold text-foreground">调用链 DAG</h3>
+            <p className="mt-0.5 text-[11px] text-muted-light">任务分段与检查点谱系。</p>
           </div>
           {onOpenFullscreen ? (
             <button
@@ -399,20 +399,20 @@ function TraceSectionProgressList({
   if (isLoading) {
     return (
       <TraceProgressState
-        label="Collecting task phases"
+        label="正在汇总任务阶段"
         detail="The first phase appears after enough context steps."
       />
     );
   }
   if (error) {
-    return <TraceProgressState label="Trace phases unavailable" detail={error} tone="error" />;
+    return <TraceProgressState label="调用链阶段不可用" detail={error} tone="error" />;
   }
   if (!dag || dag.nodes.length === 0) {
-    return <TraceProgressState label="No task progress yet" detail="Start a task to build its trace phases." />;
+    return <TraceProgressState label="暂无任务进度" detail="Start a task to build its trace phases." />;
   }
   if (dag.sections.length === 0) {
     return <TraceProgressState
-      label="Building the first phase"
+      label="正在生成第一阶段"
       detail="The trace will be grouped after several context steps or when the task finishes."
     />;
   }
@@ -573,13 +573,13 @@ function TraceDagNodeDetails({
   if (section) {
     return (
       <aside className="min-w-0 rounded-lg border border-border bg-surface p-4">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-light">Task section</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-light">任务分段</div>
         <h3 className="mt-1 text-base font-semibold text-foreground">{section.title}</h3>
         <p className="mt-3 text-xs leading-5 text-muted">{section.summary}</p>
         <div className="mt-4 grid gap-2 border-t border-border pt-4 text-xs">
-          <TraceField label="Steps" value={`${section.startEventSeq}-${section.endEventSeq}`} />
-          <TraceField label="Nodes" value={String(section.nodeIds.length)} />
-          <TraceField label="State" value={section.status} />
+          <TraceField label="步骤" value={`${section.startEventSeq}-${section.endEventSeq}`} />
+          <TraceField label="节点" value={String(section.nodeIds.length)} />
+          <TraceField label="状态" value={section.status} />
         </div>
       </aside>
     );
@@ -614,7 +614,7 @@ function TraceDagNodeDetails({
 
       {node.checkpointId ? (
         <div className="mt-4 rounded-lg border border-border bg-surface-subtle p-3">
-          <div className="text-[11px] font-semibold text-muted-light">Checkpoint</div>
+          <div className="text-[11px] font-semibold text-muted-light">检查点</div>
           <div className="mt-1 break-all font-mono text-xs text-foreground">{node.checkpointId}</div>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -642,13 +642,13 @@ function TraceDagNodeDetails({
       ) : null}
 
       <div className="mt-4 grid gap-2 border-t border-border pt-4 text-xs">
-        <TraceField label="Run" value={node.runId} />
-        <TraceField label="Event" value={node.eventSeq !== undefined ? String(node.eventSeq) : undefined} />
-        <TraceField label="Tool" value={node.toolCallId} />
+        <TraceField label="运行" value={node.runId} />
+        <TraceField label="事件" value={node.eventSeq !== undefined ? String(node.eventSeq) : undefined} />
+        <TraceField label="工具" value={node.toolCallId} />
       </div>
 
-      <TraceEdgeList title="Incoming" edges={incoming} />
-      <TraceEdgeList title="Outgoing" edges={outgoing} />
+      <TraceEdgeList title="入边" edges={incoming} />
+      <TraceEdgeList title="出边" edges={outgoing} />
     </aside>
   );
 }
@@ -678,12 +678,12 @@ function TraceContextReadableDetail({
   summary?: string;
 }) {
   const metrics = [
-    detail.model ? { label: "Model", value: detail.model } : null,
-    detail.modelProfileId ? { label: "Profile", value: detail.modelProfileId } : null,
-    detail.stepNumber !== undefined ? { label: "Step", value: String(detail.stepNumber) } : null,
-    detail.promptTokens !== undefined ? { label: "Prompt", value: formatCount(detail.promptTokens) } : null,
-    detail.remainingTokens !== undefined ? { label: "Remaining", value: formatCount(detail.remainingTokens) } : null,
-    detail.packageRevision !== undefined ? { label: "Package rev", value: String(detail.packageRevision) } : null,
+    detail.model ? { label: "模型", value: detail.model } : null,
+    detail.modelProfileId ? { label: "配置档", value: detail.modelProfileId } : null,
+    detail.stepNumber !== undefined ? { label: "步骤", value: String(detail.stepNumber) } : null,
+    detail.promptTokens !== undefined ? { label: "提示词", value: formatCount(detail.promptTokens) } : null,
+    detail.remainingTokens !== undefined ? { label: "剩余", value: formatCount(detail.remainingTokens) } : null,
+    detail.packageRevision !== undefined ? { label: "包版本", value: String(detail.packageRevision) } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
 
   return (
@@ -693,10 +693,10 @@ function TraceContextReadableDetail({
       <TraceTextPreview
         emptyText="No reasoning chunks were recorded for this step."
         text={detail.reasoning}
-        title="Model reasoning"
+        title="模型推理"
       />
-      <TraceTextPreview title="Assistant output" markdown text={detail.assistantOutput} />
-      <TraceChipSection title="Selected context groups" values={detail.selectedGroupIds} />
+      <TraceTextPreview title="助手输出" markdown text={detail.assistantOutput} />
+      <TraceChipSection title="已选上下文组" values={detail.selectedGroupIds} />
       <TraceContextPackageDetail detail={detail} />
     </div>
   );
@@ -716,15 +716,15 @@ function TraceToolReadableDetail({
 
   return (
     <div className="mt-4 grid gap-4">
-      {node.summary ? <TraceTextPreview title="Latest event" text={node.summary} /> : null}
-      <TraceDetailSection title="Tool parameters">
+      {node.summary ? <TraceTextPreview title="最新事件" text={node.summary} /> : null}
+      <TraceDetailSection title="工具参数">
         {parameters !== undefined ? (
           <ToolFormattedParams parameters={parameters} />
         ) : (
           <TraceEmptyLine text="No parameters were recorded for this tool call." />
         )}
       </TraceDetailSection>
-      <TraceDetailSection title="Tool result">
+      <TraceDetailSection title="工具结果">
         {result !== undefined ? (
           <ToolFormattedResult toolName={toolName} result={result} variant="console" />
         ) : (
@@ -737,16 +737,16 @@ function TraceToolReadableDetail({
 
 function TraceContextPackageDetail({ detail }: { detail: TraceContextDetail }) {
   const sourceMetrics = [
-    detail.selectedSources ? { label: "Selected sources", value: String(detail.selectedSources.length) } : null,
-    detail.omittedSources ? { label: "Omitted sources", value: String(detail.omittedSources.length) } : null,
-    detail.omittedGroupIds ? { label: "Omitted groups", value: String(detail.omittedGroupIds.length) } : null,
+    detail.selectedSources ? { label: "已选来源", value: String(detail.selectedSources.length) } : null,
+    detail.omittedSources ? { label: "省略的来源", value: String(detail.omittedSources.length) } : null,
+    detail.omittedGroupIds ? { label: "省略的上下文组", value: String(detail.omittedGroupIds.length) } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
 
   return (
-    <TraceDetailSection title="Context package">
+    <TraceDetailSection title="上下文包">
       <div className="grid gap-2 text-xs">
-        <TraceField label="Package" value={detail.packageId} />
-        <TraceField label="Plan" value={detail.planId} />
+        <TraceField label="上下文包" value={detail.packageId} />
+        <TraceField label="计划" value={detail.planId} />
       </div>
       <TraceMetricGrid metrics={sourceMetrics} />
       <TraceTokenReport value={detail.tokenReport} />
@@ -869,7 +869,7 @@ function TraceDecisionList({ decisions }: { decisions?: unknown[] }) {
   if (!decisions || decisions.length === 0) return null;
   return (
     <div className="grid gap-2">
-      <div className="text-[11px] font-semibold text-muted-light">Selection decisions</div>
+      <div className="text-[11px] font-semibold text-muted-light">选择决策</div>
       {decisions.slice(0, 5).map((decision, index) => {
         const record = recordValue(decision);
         const label = stringValue(record?.decision) ?? stringValue(record?.kind) ?? `Decision ${index + 1}`;
@@ -980,11 +980,11 @@ function TraceArtifactReadableDetail({
     <div className="mt-4 grid gap-4">
       <TraceMetricGrid
         metrics={[
-          detail.artifactType ? { label: "Type", value: detail.artifactType } : null,
+          detail.artifactType ? { label: "类型", value: detail.artifactType } : null,
           detail.mimeType ? { label: "MIME", value: detail.mimeType } : null,
         ].filter(Boolean) as Array<{ label: string; value: string }>}
       />
-      <TraceDetailSection title="Output preview">
+      <TraceDetailSection title="输出预览">
         {detail.preview !== undefined ? (
           <TracePreviewValue artifactName={detail.name ?? node.label} value={detail.preview} />
         ) : (

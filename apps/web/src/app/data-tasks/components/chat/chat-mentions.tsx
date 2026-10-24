@@ -313,7 +313,7 @@ function MentionMenu({
   return (
     <div
       role="listbox"
-      aria-label="Select capabilities (@)"
+      aria-label="选择能力（@）"
       className="absolute bottom-full left-0 z-50 mb-2 w-[min(420px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-surface shadow-lg"
       onMouseDown={(event) => event.preventDefault()}
     >
@@ -325,7 +325,7 @@ function MentionMenu({
           <span className="rounded bg-surface-subtle px-1.5 py-0.5 font-medium text-muted">
             ↑↓ Move
           </span>
-          <span className="hidden sm:inline">Enter Select</span>
+          <span className="hidden sm:inline">回车选择</span>
           <button
             type="button"
             onClick={onClose}

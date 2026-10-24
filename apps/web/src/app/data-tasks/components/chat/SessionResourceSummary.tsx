@@ -126,7 +126,7 @@ export function SessionHeaderResourceChips({
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-0.5 text-[11px] font-medium text-muted shadow-[var(--shadow-card)]">
         <ResourceKindIcon kind="db" className="h-3.5 w-3.5 shrink-0" />
-        <span>No db/kb selected</span>
+        <span>未选择数据库/知识库</span>
       </span>
     );
   }

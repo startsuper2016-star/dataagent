@@ -29,7 +29,7 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg text-left transition-colors duration-200 hover:bg-surface-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-light/50"
       >
-        <h3 className={panelTitleClass}>Run Diagnostics</h3>
+        <h3 className={panelTitleClass}>运行诊断</h3>
         <span
           aria-hidden="true"
           className={[
@@ -44,15 +44,15 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
       </button>
       {expanded ? (
       <div className="mt-3 grid gap-2">
-        <DiagnosticCard title="Resolved Resources">
+        <DiagnosticCard title="已解析资源">
           {config ? (
             <div className="grid gap-1.5">
-              <ConfigLine label="Datasource" value={config.activeDatasourceId} />
-              <ConfigLine label="Model" value={config.activeLlmProfileId} />
+              <ConfigLine label="数据源" value={config.activeDatasourceId} />
+              <ConfigLine label="模型" value={config.activeLlmProfileId} />
               <ConfigLine label="KB" value={countList(config.enabledKnowledgeIds)} />
               <ConfigLine label="MCP" value={countList(config.enabledMcpServerIds)} />
-              <ConfigLine label="Files" value={countList(config.fileIds)} />
-              <ConfigLine label="Evidence" value={countList(config.evidenceRefs)} />
+              <ConfigLine label="文件" value={countList(config.fileIds)} />
+              <ConfigLine label="证据" value={countList(config.evidenceRefs)} />
               {config.evidenceResolution ? (
                 <p className="text-[11px] leading-4 text-muted-light">
                   Evidence accepted {config.evidenceResolution.accepted.length}; dropped{" "}
@@ -72,16 +72,16 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
           )}
         </DiagnosticCard>
 
-        <DiagnosticCard title="Skill Selection">
+        <DiagnosticCard title="技能选择">
           {skillSelection ? (
             <div className="grid gap-2">
-              <ConfigLine label="Mode" value={skillSelection.mode ?? "Unlabeled"} />
+              <ConfigLine label="模式" value={skillSelection.mode ?? "Unlabeled"} />
               {skillSelection.selected.length > 0 ? (
                 <ChipRow
                   values={skillSelection.selected.map((skill) => skill.name ?? skill.id)}
                 />
               ) : (
-                <p className="text-[11px] text-muted-light">No skills selected for this run.</p>
+                <p className="text-[11px] text-muted-light">本次运行未选择技能。</p>
               )}
               {skillSelection.effectiveToolPolicy ? (
                 <p className="text-[11px] leading-4 text-muted-light">
@@ -96,7 +96,7 @@ export function RunConfigurationPanel({ liveRun }: { liveRun: LiveRun }) {
           )}
         </DiagnosticCard>
 
-        <DiagnosticCard title="Goal And Context">
+        <DiagnosticCard title="目标与上下文">
           {goal || contextReports.length > 0 ? (
             <div className="grid gap-2">
               {goal ? (

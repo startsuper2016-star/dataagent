@@ -7,7 +7,7 @@ export const metadata: Metadata = {
     default: "DataFoundry",
     template: "%s · DataFoundry",
   },
-  description: "Agent-driven data task workspace",
+  description: "Agent 驱动的数据任务工作台",
 };
 
 export default function RootLayout({

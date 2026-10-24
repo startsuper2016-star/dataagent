@@ -164,22 +164,22 @@ export function TraceDagCanvas({
     return (
       <TraceDagCanvasState
         tone="loading"
-        title="Loading trace graph"
-        subtitle="Preparing checkpoint tree."
+        title="调用链图加载中"
+        subtitle="正在准备检查点树。"
       />
     );
   }
 
   if (error) {
-    return <TraceDagCanvasState tone="error" title="Trace graph failed" subtitle={error} />;
+    return <TraceDagCanvasState tone="error" title="调用链图加载失败" subtitle={error} />;
   }
 
   if (!layout || layout.nodes.length === 0) {
     return (
       <TraceDagCanvasState
         tone="empty"
-        title="No trace graph nodes yet"
-        subtitle="Run a task to generate checkpoints."
+        title="暂无调用链节点"
+        subtitle="运行任务后生成检查点。"
       />
     );
   }
@@ -190,7 +190,7 @@ export function TraceDagCanvas({
     <section className="min-w-0 rounded-lg border border-border bg-surface p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-foreground">Trace DAG</h3>
+          <h3 className="text-sm font-semibold text-foreground">调用链 DAG</h3>
           <div className="mt-0.5 text-[11px] text-muted-light">
             {layout.nodes.length} visible nodes · {sections.length} sections
           </div>
@@ -198,7 +198,7 @@ export function TraceDagCanvas({
         <div className="flex items-center gap-1">
           <TraceCanvasToolButton label="-" onClick={() => zoomBy(0.85)} />
           <TraceCanvasToolButton label="+" onClick={() => zoomBy(1.18)} />
-          <TraceCanvasToolButton label="Fit" onClick={resetView} />
+          <TraceCanvasToolButton label="适应画布" onClick={resetView} />
         </div>
       </div>
 
@@ -226,7 +226,7 @@ export function TraceDagCanvas({
       >
         <svg
           ref={svgRef}
-          aria-label="Trace DAG vertical tree"
+          aria-label="调用链 DAG 纵向树"
           className="h-full w-full"
           role="img"
           viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
@@ -277,10 +277,10 @@ export function TraceDagCanvas({
 
         <TraceMiniMap layout={layout} selectedNode={selectedNode} view={view} />
         <div className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap gap-2">
-          <TraceLegendPill tone="user" label="User" />
-          <TraceLegendPill tone="tool" label="Tool" />
-          <TraceLegendPill tone="checkpoint" label="Checkpoint" />
-          <TraceLegendPill tone="branch" label="Branch" />
+          <TraceLegendPill tone="user" label="用户" />
+          <TraceLegendPill tone="tool" label="工具" />
+          <TraceLegendPill tone="checkpoint" label="检查点" />
+          <TraceLegendPill tone="branch" label="分支" />
         </div>
       </div>
     </section>

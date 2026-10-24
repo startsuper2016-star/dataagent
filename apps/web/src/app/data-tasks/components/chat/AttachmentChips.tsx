@@ -41,7 +41,7 @@ export function AttachmentChips({
             )}
             <button
               type="button"
-              aria-label="Remove attachment"
+              aria-label="移除附件"
               onClick={() => onRemove(att.id)}
               className="shrink-0 cursor-pointer text-muted-light hover:text-foreground"
             >

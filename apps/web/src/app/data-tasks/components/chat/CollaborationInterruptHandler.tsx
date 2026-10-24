@@ -235,7 +235,7 @@ function AskUserPrompt({
   if (options.length > 0) {
     return (
       <CollaborationInterruptPanel data-testid="collaboration-interrupt-ask-user">
-        <div className={sectionLabelClass}>User Collaboration</div>
+        <div className={sectionLabelClass}>用户协作</div>
         <p className="mt-1.5 text-sm font-medium leading-6 text-foreground">{question}</p>
         <ChoiceOptionList
           options={options}
@@ -248,7 +248,7 @@ function AskUserPrompt({
 
   return (
     <CollaborationInterruptPanel data-testid="collaboration-interrupt-ask-user">
-      <div className={sectionLabelClass}>User Collaboration</div>
+      <div className={sectionLabelClass}>用户协作</div>
       <p className="mt-1.5 text-sm font-medium text-foreground">{question}</p>
       <textarea
         value={answer}
@@ -256,7 +256,7 @@ function AskUserPrompt({
         rows={3}
         disabled={submitted}
         className="mt-3 w-full resize-none rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none transition-colors duration-150 focus:border-muted-light focus-visible:ring-2 focus-visible:ring-primary/20 disabled:opacity-60"
-        placeholder="Enter your answer..."
+        placeholder="输入你的回答…"
       />
       <div className="mt-3 flex justify-end">
         <button

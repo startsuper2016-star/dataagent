@@ -422,14 +422,14 @@ function renderSqlResult(result: unknown, variant: ToolResultVariant): ReactNode
   const { columns: displayColumns, rows } = normalizeSqlTable(parsed.columns, parsed.rows);
   const metaItems = [
     {
-      label: "Rows",
+      label: "行数",
       value: String(parsed.row_count ?? parsed.rows.length),
     },
     ...(parsed.elapsed_ms !== undefined
-      ? [{ label: "Duration", value: `${parsed.elapsed_ms}ms` }]
+      ? [{ label: "耗时", value: `${parsed.elapsed_ms}ms` }]
       : []),
-    ...(parsed.audit_log_id ? [{ label: "Audit", value: parsed.audit_log_id }] : []),
-    ...(parsed.artifact_id ? [{ label: "Output", value: parsed.artifact_id }] : []),
+    ...(parsed.audit_log_id ? [{ label: "审计", value: parsed.audit_log_id }] : []),
+    ...(parsed.artifact_id ? [{ label: "输出", value: parsed.artifact_id }] : []),
   ];
 
   if (rows.length === 0) {
@@ -458,7 +458,7 @@ function renderSchemaResult(result: unknown): ReactNode | null {
   return (
     <div className="grid gap-2">
       {parsed.datasource_id ? (
-        <MetaChips items={[{ label: "Datasource", value: parsed.datasource_id }]} />
+        <MetaChips items={[{ label: "数据源", value: parsed.datasource_id }]} />
       ) : null}
       {parsed.tables.map((table) => (
         <div key={table.name} className="rounded-lg border border-border bg-surface/80 p-2.5">
@@ -497,8 +497,8 @@ function renderPreviewTable(record: Record<string, unknown>, variant: ToolResult
     <div className="grid gap-2">
       <MetaChips
         items={[
-          ...(table ? [{ label: "Table", value: table }] : []),
-          { label: "Rows", value: String(rowCount) },
+          ...(table ? [{ label: "数据表", value: table }] : []),
+          { label: "行数", value: String(rowCount) },
         ]}
       />
       <ResultDataTable columns={displayColumns} rows={rows} variant={variant} />
@@ -513,11 +513,11 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
       <div className="grid gap-2">
         <MetaChips
           items={[
-            { label: "Path", value: writeMatch[2] },
-            { label: "Size", value: `${writeMatch[1]} bytes` },
+            { label: "路径", value: writeMatch[2] },
+            { label: "大小", value: `${writeMatch[1]} bytes` },
           ]}
         />
-        <p className="text-xs text-step-success">File written to the workspace.</p>
+        <p className="text-xs text-step-success">文件已写入工作区。</p>
       </div>
     );
   }
@@ -526,8 +526,8 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
   if (mkdirMatch) {
     return (
       <div className="grid gap-2">
-        <MetaChips items={[{ label: "Directory", value: mkdirMatch[1] }]} />
-        <p className="text-xs text-muted">Directory created.</p>
+        <MetaChips items={[{ label: "目录", value: mkdirMatch[1] }]} />
+        <p className="text-xs text-muted">目录已创建。</p>
       </div>
     );
   }
@@ -537,10 +537,10 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
     return (
       <MetaChips
         items={[
-          { label: "Path", value: statMatch[1] },
-          { label: "Type", value: statMatch[2] },
-          { label: "Size", value: `${statMatch[3]} bytes` },
-          { label: "Modified", value: statMatch[4] },
+          { label: "路径", value: statMatch[1] },
+          { label: "类型", value: statMatch[2] },
+          { label: "大小", value: `${statMatch[3]} bytes` },
+          { label: "修改时间", value: statMatch[4] },
         ]}
       />
     );
@@ -596,7 +596,7 @@ function renderWorkspaceObservation(toolName: string, text: string, variant: Too
       return <TextBlock text={text} variant={variant} tone="terminal" />;
     }
     return (
-      <p className="text-xs text-muted-light">Command ran with no stdout.</p>
+      <p className="text-xs text-muted-light">命令执行完成，无标准输出。</p>
     );
   }
 
@@ -620,9 +620,9 @@ function renderTaskTools(record: Record<string, unknown>, variant: ToolResultVar
       {total > 0 ? (
         <MetaChips
           items={[
-            { label: "Tasks", value: String(total) },
-            ...(completed !== undefined ? [{ label: "Completed", value: String(completed) }] : []),
-            ...(allCompleted ? [{ label: "Status", value: "All completed" }] : []),
+            { label: "任务", value: String(total) },
+            ...(completed !== undefined ? [{ label: "已完成", value: String(completed) }] : []),
+            ...(allCompleted ? [{ label: "状态", value: "All completed" }] : []),
           ]}
         />
       ) : null}
@@ -664,7 +664,7 @@ function renderKnowledge(record: Record<string, unknown>, variant: ToolResultVar
   return (
     <div className="grid gap-2">
       {collectionId ? (
-        <MetaChips items={[{ label: "Knowledge base", value: collectionId }]} />
+        <MetaChips items={[{ label: "知识库", value: collectionId }]} />
       ) : null}
       {chunks.map((chunk, index) => {
         const item = chunk as Record<string, unknown>;

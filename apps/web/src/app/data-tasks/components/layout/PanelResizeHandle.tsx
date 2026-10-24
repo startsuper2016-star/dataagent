@@ -44,7 +44,7 @@ export function PanelResizeHandle({
       tabIndex={0}
       onPointerDown={onResizeStart}
       onDoubleClick={onReset}
-      title="Drag to resize, double-click to reset"
+      title="拖动调整宽度，双击复位"
       className={[
         "absolute top-0 z-10 h-full w-1.5 cursor-col-resize",
         edgeClass,

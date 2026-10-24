@@ -414,7 +414,7 @@ export function TraceList({
   if (entries.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-surface-subtle p-5 text-center">
-        <div className="text-sm font-semibold text-foreground">No trace events yet</div>
+        <div className="text-sm font-semibold text-foreground">暂无调用链事件</div>
         <p className="mt-2 text-xs leading-5 text-muted">
           {emptyHint ?? "After you send a question, Agent data trail events appear here in time order."}
         </p>

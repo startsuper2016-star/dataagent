@@ -30,7 +30,7 @@ export function LoginClient() {
   }, [router]);
 
   if (checking) {
-    return <PasswordAuthShell title="Loading account..." />;
+    return <PasswordAuthShell title="正在加载账号…" />;
   }
 
   return (

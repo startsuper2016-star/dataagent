@@ -717,7 +717,7 @@ function DataLinkCanvas({
       <svg
         ref={svgRef}
         role="img"
-        aria-label="Datalink nodes and relationships"
+        aria-label="Datalink 节点与关系"
         data-testid="datalink-canvas-svg"
         className="h-full w-full touch-none"
         viewBox={`0 0 ${layout.width} ${layout.height}`}
@@ -1010,7 +1010,7 @@ function AddTablePanel({
         >
           <option value="csv">CSV</option>
           <option value="parquet">Parquet</option>
-          <option value="database">Database</option>
+          <option value="database">数据库</option>
         </select>
         <input
           value={table}

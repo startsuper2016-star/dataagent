@@ -7,11 +7,11 @@ import { configApi } from "../../lib/config-api/client";
 export type AuthMode = "login" | "register" | "forgot" | "verify" | "reset";
 
 const AUTH_MODE_META: Record<AuthMode, { title: string; subtitle: string; submit: string }> = {
-  login: { title: "Sign in", subtitle: "Welcome back to DataFoundry", submit: "Sign in" },
-  register: { title: "Create account", subtitle: "Get started with DataFoundry", submit: "Create account" },
-  forgot: { title: "Forgot password", subtitle: "We'll send you a reset link", submit: "Send reset link" },
-  verify: { title: "Verify email", subtitle: "Enter the code we sent you", submit: "Verify email" },
-  reset: { title: "Reset password", subtitle: "Choose a new password", submit: "Reset password" },
+  login: { title: "登录", subtitle: "欢迎回到 DataFoundry", submit: "登录" },
+  register: { title: "创建账号", subtitle: "开始使用 DataFoundry", submit: "创建账号" },
+  forgot: { title: "忘记密码", subtitle: "我们将向你发送重置链接", submit: "发送重置链接" },
+  verify: { title: "验证邮箱", subtitle: "输入我们发送给你的验证码", submit: "验证邮箱" },
+  reset: { title: "重置密码", subtitle: "设置一个新密码", submit: "重置密码" },
 };
 
 export const AUTH_BUTTON_CLASS =
@@ -65,7 +65,7 @@ export function AuthFlow({
     setMessage(null);
     try {
       if ((mode === "register" || mode === "reset") && password.length < 6) {
-        setLocalError("Password must be at least 6 characters.");
+        setLocalError("密码至少需要 6 个字符。");
         return;
       }
       if (mode === "login") {
@@ -76,7 +76,7 @@ export function AuthFlow({
       if (mode === "register") {
         const result = await configApi.register({ email, password, displayName });
         setMessage(
-          result.verificationToken ? `Verify email token: ${result.verificationToken}` : "Verify email",
+          result.verificationToken ? `验证码：${result.verificationToken}` : "请查收验证邮件",
         );
         setMode("verify");
         return;
@@ -84,7 +84,7 @@ export function AuthFlow({
       if (mode === "forgot") {
         const result = await configApi.forgotPassword({ email });
         setMessage(
-          result.resetToken ? `Reset token: ${result.resetToken}` : "Check your email for a reset link.",
+          result.resetToken ? `重置码：${result.resetToken}` : "重置链接已发送到你的邮箱。",
         );
         setMode("reset");
         return;
@@ -96,11 +96,11 @@ export function AuthFlow({
       }
       if (mode === "reset") {
         await configApi.resetPassword({ token, password });
-        setMessage("Password reset. Sign in to continue.");
+        setMessage("密码已重置，请重新登录。");
         setMode("login");
       }
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "Authentication failed");
+      setLocalError(err instanceof Error ? err.message : "认证失败");
     } finally {
       setSubmitting(false);
     }
@@ -115,27 +115,27 @@ export function AuthFlow({
         {mode === "register" ? (
           <AuthField
             id="auth-display-name"
-            label="Display name"
+            label="显示名"
             value={displayName}
             onChange={setDisplayName}
-            placeholder="Ada Lovelace"
+            placeholder="你的名字"
             autoComplete="name"
           />
         ) : null}
         {mode === "verify" || mode === "reset" ? (
           <AuthField
             id="auth-token"
-            label={mode === "verify" ? "Verification code" : "Reset code"}
+            label={mode === "verify" ? "验证码" : "重置码"}
             value={token}
             onChange={setToken}
-            placeholder={mode === "verify" ? "Paste your verification code" : "Paste your reset code"}
+            placeholder={mode === "verify" ? "粘贴你的验证码" : "粘贴你的重置码"}
             autoComplete="one-time-code"
           />
         ) : null}
         {mode !== "verify" && mode !== "reset" ? (
           <AuthField
             id="auth-email"
-            label="Email"
+            label="邮箱"
             type="email"
             value={email}
             onChange={setEmail}
@@ -146,12 +146,12 @@ export function AuthFlow({
         {mode !== "forgot" && mode !== "verify" ? (
           <AuthField
             id="auth-password"
-            label={mode === "reset" ? "New password" : "Password"}
+            label={mode === "reset" ? "新密码" : "密码"}
             type="password"
             value={password}
             onChange={setPassword}
-            placeholder={mode === "login" ? "••••••••" : "At least 6 characters"}
-            hint={mode === "register" || mode === "reset" ? "At least 6 characters" : undefined}
+            placeholder={mode === "login" ? "••••••••" : "至少 6 个字符"}
+            hint={mode === "register" || mode === "reset" ? "至少 6 个字符" : undefined}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
             {...(mode === "login"
               ? {
@@ -161,7 +161,7 @@ export function AuthFlow({
                       onClick={() => goToSubMode("forgot")}
                       className="text-xs font-medium text-muted transition-colors hover:text-foreground"
                     >
-                      Forgot password?
+                      忘记密码？
                     </button>
                   ),
                 }
@@ -188,7 +188,7 @@ export function AuthFlow({
           {submitting ? (
             <>
               <SpinnerIcon />
-              <span>Please wait…</span>
+              <span>请稍候…</span>
             </>
           ) : (
             meta.submit
@@ -231,14 +231,14 @@ function AuthModeSwitch({
     <div className="mt-5 border-t border-border pt-4 text-center text-xs text-muted">
       {mode === "login" ? (
         registrationEnabled ? (
-          <p>New to DataFoundry? {link("Create an account", onGoRegister)}</p>
+          <p>还没有账号？{link("创建账号", onGoRegister)}</p>
         ) : (
-          <p>Registration is closed. Contact your deployment administrator.</p>
+          <p>注册已关闭，请联系部署管理员。</p>
         )
       ) : mode === "register" ? (
-        <p>Already have an account? {link("Sign in", onGoLogin)}</p>
+        <p>已有账号？{link("直接登录", onGoLogin)}</p>
       ) : (
-        <p>{link("Back to sign in", onGoLogin)}</p>
+        <p>{link("返回登录", onGoLogin)}</p>
       )}
     </div>
   );

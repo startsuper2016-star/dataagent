@@ -30,21 +30,21 @@ export function RegisterClient() {
   }, [router]);
 
   if (checking) {
-    return <PasswordAuthShell title="Loading account..." />;
+    return <PasswordAuthShell title="正在加载账号…" />;
   }
 
   if (!registrationEnabled) {
     return (
       <PasswordAuthShell
-        title="Registration closed"
-        subtitle="Registration is closed. Contact your deployment administrator."
+        title="注册已关闭"
+        subtitle="注册已关闭，请联系部署管理员。"
       >
         <button
           type="button"
           className="text-sm font-medium text-foreground underline-offset-2 hover:underline"
           onClick={() => router.push("/login")}
         >
-          Back to sign in
+          返回登录
         </button>
       </PasswordAuthShell>
     );
