@@ -5100,11 +5100,9 @@ function SessionPaneContent({
             />
           ))}
           {/* Ontology modeling is a standalone governance route (/ontology), not an
-              in-workbench panel — hence an external link card instead of a nav action. */}
+              in-workbench panel — hence a plain link card instead of a nav action. */}
           <a
             href="/ontology"
-            target="_blank"
-            rel="noreferrer"
             className="group flex min-h-8 w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors duration-200 hover:bg-surface/80"
           >
             <span
