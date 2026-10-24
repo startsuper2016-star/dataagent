@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { ontologyFetch } from "../../lib/ontology-client";
+import { ontologyFetch } from "../../../lib/ontology-client";
 
 type VersionRow = {
   id: string;

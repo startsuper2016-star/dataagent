@@ -86,9 +86,12 @@ describe("bindParams (P3-3 native binding)", () => {
     expect(block).toEqual({ sql: "SELECT /* :p0 */ a FROM t WHERE a = ?", values: [1] });
   });
 
-  it("treats double-quoted identifiers as opaque spans", () => {
+  it("treats double-quoted and backtick-quoted identifiers as opaque spans", () => {
     const bound = bindParams('SELECT "col:p1" FROM t WHERE a = :p1', { p1: 1 });
     expect(bound).toEqual({ sql: 'SELECT "col:p1" FROM t WHERE a = ?', values: [1] });
+
+    const backtick = bindParams("SELECT `col:p1` FROM t WHERE a = :p1", { p1: 1 });
+    expect(backtick).toEqual({ sql: "SELECT `col:p1` FROM t WHERE a = ?", values: [1] });
   });
 
   it("executes comment-bearing SQL end-to-end (comment placeholders do not consume values)", () => {

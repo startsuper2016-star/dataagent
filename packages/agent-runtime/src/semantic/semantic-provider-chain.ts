@@ -47,9 +47,11 @@ export class SemanticProviderChain {
         if (!(error instanceof SemanticProviderError) || !error.fallbackAllowed) {
           throw error;
         }
-        // 落回本体层是可观测事件（ONTOLOGY_CONTEXT_UNAVAILABLE=基础设施故障而非未建模）：
-        // fallbackReason 只进协议事件元数据，cause 对运维不可见，这里必须留痕
-        console.warn("[data-foundry] ontology_semantic_fallback", error.code, error.cause ?? error.message);
+        // ONTOLOGY_NOT_CONFIGURED（数据源未建模本体）是正常路径，不刷日志；
+        // 其余（CONTEXT_UNAVAILABLE 等基础设施故障）必须留痕——fallbackReason 只进协议事件元数据
+        if (error.code !== "ONTOLOGY_NOT_CONFIGURED") {
+          console.warn("[data-foundry] ontology_semantic_fallback", error.code, error.cause ?? error.message);
+        }
         fallbackReason = error.code;
       }
     }

@@ -48,8 +48,8 @@ export function bindParams(
   let i = 0;
   while (i < sql.length) {
     const ch = sql[i];
-    if (ch === "'" || ch === '"') {
-      // 字符串字面量/带引号标识符整体按不透明 span 拷贝（'' 为转义引号）
+    if (ch === "'" || ch === '"' || ch === "`") {
+      // 字符串字面量/带引号标识符（SQLite 双引号与反引号两种引用）整体按不透明 span 拷贝（'' 为转义引号）
       out += ch;
       i += 1;
       while (i < sql.length) {
