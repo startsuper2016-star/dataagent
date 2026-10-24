@@ -46,6 +46,7 @@ import type { ConfigApiContext, ConfigApiResponse } from "./types.js";
  * - GET  /api/v1/ontology/versions/:id            → 版本详情（含实体清单与一致性检查）
  * - POST /api/v1/ontology/versions/:id/submit     → 一致性检查全过 → 快照组件 → submitted
  * - POST /api/v1/ontology/versions/:id/publish    → submitted → published
+ * - POST /api/v1/ontology/promote                 → DataLink 候选转正（实体/属性/关系 draft，人工审批）
  *
  * 写守卫：与会话认证同惯例（config-api 分发链已解析 session/bearer），无独立角色体系；
  * 写面仅限 ont_* 表，物理数据连接保持 readOnly。
@@ -109,6 +110,8 @@ export const handleOntologyRequest = async (
         return await handleDatasourceTables(method, subPath.slice(1), context);
       case "versions":
         return await handleVersionsRoute(request, method, subPath.slice(1), context);
+      case "promote":
+        return await handlePromote(request, method, context);
       default:
         throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知本体端点: ${subPath[0] ?? ""}`);
     }
@@ -478,6 +481,176 @@ const handleVersionPublish = (versionId: string, db: DatabaseSync): ConfigApiRes
     versionId
   );
   return ok(versionDetail(db, versionId));
+};
+
+/** POST /promote —— DataLink 推断候选人工转正：实体/属性/绑定/关系落 draft，走既有审批流。 */
+const handlePromote = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  requireMethod(method, "POST");
+  const db = context.metadataStore.db;
+  const body = await readJsonBody(request);
+  const candidates = arrayValue(body.entities);
+  if (!candidates || candidates.length === 0) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 entities 候选清单");
+  }
+  const datasourceId = resolvePromotionDatasourceId(context, stringValue(body.datasourceId));
+  const ontologyId = requireOntologyId(db);
+
+  const insertEntity = db.prepare(
+    "INSERT INTO ont_entities (id, ontology_id, name, name_cn, tier, status, description) VALUES (?, ?, ?, ?, 2, 'draft', ?)"
+  );
+  const insertAttribute = db.prepare(
+    "INSERT INTO ont_attributes (id, entity_id, name, display_name, type, required, sort) VALUES (?, ?, ?, ?, ?, 0, ?)"
+  );
+  const insertBinding = db.prepare(
+    "INSERT INTO ont_bindings (id, entity_id, datasource_id, table_name, id_column, field_mappings_json, status) VALUES (?, ?, ?, ?, ?, ?, 'draft')"
+  );
+  const insertRelation = db.prepare(
+    "INSERT INTO ont_relations (id, from_entity_id, to_entity_id, name, rel_type, cardinality, source_field, target_field, description) VALUES (?, ?, ?, ?, 'has_many', ?, ?, ?, ?)"
+  );
+
+  const results: Array<Record<string, unknown>> = [];
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const candidate of candidates) {
+      const name = stringValue(candidate.name);
+      const table = stringValue(candidate.table);
+      if (!name || !table) {
+        throw new OntologyHttpError(400, "BAD_REQUEST", "候选缺少 name 或 table");
+      }
+      const attrs = arrayValue(candidate.attributes) ?? [];
+      const existing = db.prepare("SELECT id FROM ont_entities WHERE name = ?").get(name) as
+        | { id: string }
+        | undefined;
+      let entityId: string;
+      let reused: boolean;
+      if (existing) {
+        entityId = existing.id;
+        reused = true;
+      } else {
+        entityId = randomUUID();
+        reused = false;
+        insertEntity.run(entityId, ontologyId, name, stringValue(candidate.nameCn) ?? null, stringValue(candidate.description) ?? null);
+        attrs.forEach((attr, index) => {
+          const attrName = stringValue(attr.name);
+          if (!attrName) {
+            throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${name} 存在缺 name 的属性`);
+          }
+          insertAttribute.run(
+            randomUUID(),
+            entityId,
+            attrName,
+            stringValue(attr.displayName) ?? null,
+            stringValue(attr.type) ?? "string",
+            index
+          );
+        });
+      }
+      // 绑定：同实体已有任一绑定则不重复建（编辑/审批走既有绑定）
+      const existingBinding = db
+        .prepare("SELECT id FROM ont_bindings WHERE entity_id = ? LIMIT 1")
+        .get(entityId) as { id: string } | undefined;
+      let bindingId: string | undefined;
+      if (!existingBinding) {
+        const idColumn = stringValue(candidate.idColumn) ?? "id";
+        bindingId = randomUUID();
+        const attributeRows = db
+          .prepare("SELECT id, name FROM ont_attributes WHERE entity_id = ?")
+          .all(entityId) as Array<{ id: string; name: string }>;
+        const columns = new Set(
+          (arrayValue(candidate.attributes) ?? [])
+            .map((a) => stringValue(a.sourceColumn))
+            .filter((c): c is string => Boolean(c))
+        );
+        const idColumns = columns.has(idColumn) ? idColumn : (stringValue(candidate.idColumn) ?? "id");
+        const mappings = attributeRows
+          .map((row) => {
+            const candidateAttr = (arrayValue(candidate.attributes) ?? []).find(
+              (a) => stringValue(a.name) === row.name
+            );
+            const sourceColumn = stringValue(candidateAttr?.sourceColumn) ?? row.name;
+            return { attribute_id: row.id, source_column: sourceColumn };
+          });
+        insertBinding.run(bindingId, entityId, datasourceId, table, idColumns, JSON.stringify(mappings));
+      }
+      results.push({
+        entity: name,
+        reused,
+        entityId,
+        bindingCreated: Boolean(bindingId)
+      });
+    }
+    // 关系：全部实体处理完后按名解析插入（两端实体存在性已保证）
+    for (const candidate of candidates) {
+      const fromName = stringValue(candidate.name);
+      if (!fromName) continue;
+      for (const rel of arrayValue(candidate.relations) ?? []) {
+        const relName = stringValue(rel.name);
+        const toName = stringValue(rel.to);
+        if (!relName || !toName) {
+          throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${fromName} 存在不完整关系（缺 name/to）`);
+        }
+        const from = db.prepare("SELECT id FROM ont_entities WHERE name = ?").get(fromName) as { id: string };
+        const to = db.prepare("SELECT id FROM ont_entities WHERE name = ?").get(toName);
+        if (!to) {
+          throw new OntologyHttpError(400, "BAD_REQUEST", `关系终点实体不存在: ${toName}`);
+        }
+        const duplicate = db
+          .prepare("SELECT 1 FROM ont_relations WHERE from_entity_id = ? AND to_entity_id = ? AND name = ?")
+          .get(from.id, (to as { id: string }).id, relName);
+        if (!duplicate) {
+          insertRelation.run(
+            randomUUID(),
+            from.id,
+            (to as { id: string }).id,
+            relName,
+            stringValue(rel.cardinality) ?? "1:N",
+            stringValue(rel.sourceField) ?? null,
+            stringValue(rel.targetField) ?? null,
+            stringValue(rel.description) ?? null
+          );
+        }
+      }
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ok({
+    datasource: datasourceId,
+    entities: results,
+    next: "到 /ontology/bindings/:entity 逐个编辑并审批，或到 /ontology/versions 发起版本发布"
+  });
+};
+
+/** 晋升目标数据源：body.datasourceId 优先，缺省解析当前用户的 SPC 数据源。 */
+const resolvePromotionDatasourceId = (
+  context: OntologyRouteContext,
+  explicitId: string | undefined
+): string => {
+  if (explicitId) {
+    return explicitId;
+  }
+  const ds = context.metadataStore.db
+    .prepare("SELECT id FROM data_sources WHERE user_id = ? AND name = ? AND status = 'ready'")
+    .get(context.userId, SPC_DATASOURCE_NAME) as { id: string } | undefined;
+  if (!ds) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未找到数据源 ${SPC_DATASOURCE_NAME}`);
+  }
+  return ds.id;
+};
+
+/** 取本体归属：库中唯一本体（MVP 单本体），缺失即 400。 */
+const requireOntologyId = (db: DatabaseSync): string => {
+  const row = db.prepare("SELECT id FROM ont_ontologies LIMIT 1").get() as { id: string } | undefined;
+  if (!row) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "库中没有本体，先完成本体建模");
+  }
+  return row.id;
 };
 
 // --- 版本/绑定辅助 -------------------------------------------------------------------

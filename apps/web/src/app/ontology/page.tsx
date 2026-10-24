@@ -35,6 +35,9 @@ export default function OntologyPage() {
   const [context, setContext] = useState<OntologyContext | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteJson, setPromoteJson] = useState("");
+  const [promoteResult, setPromoteResult] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/v1/ontology/context", { credentials: "same-origin" })
@@ -46,6 +49,33 @@ export default function OntologyPage() {
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
+
+  const promote = async () => {
+    setPromoteResult(null);
+    let body: unknown;
+    try {
+      body = JSON.parse(promoteJson);
+    } catch {
+      setPromoteResult("❌ 不是合法 JSON");
+      return;
+    }
+    const res = await fetch("/api/v1/ontology/promote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(body)
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setPromoteResult(`❌ ${json.error?.message ?? `HTTP ${res.status}`}`);
+      return;
+    }
+    setPromoteResult(
+      `✅ 已晋升为 draft：${(json.data.entities as Array<{ entity: string; reused: boolean; bindingCreated: boolean }>)
+        .map((e) => `${e.entity}${e.reused ? "（复用）" : ""}${e.bindingCreated ? "（新建绑定）" : ""}`)
+        .join("、")} — 到绑定列表逐个审批`
+    );
+  };
 
   if (loading)
     return (
@@ -93,6 +123,38 @@ export default function OntologyPage() {
       </header>
 
       <Section title="绑定（Entity → Datasource）">
+        <div className="mb-3 flex gap-3 text-sm">
+          <button
+            type="button"
+            onClick={() => setPromoteOpen((v) => !v)}
+            className="rounded border border-slate-300 px-3 py-1.5 font-medium text-slate-600 hover:bg-slate-100"
+          >
+            {promoteOpen ? "收起晋升" : "从 DataLink 晋升候选"}
+          </button>
+          <span className="self-center text-xs text-slate-400">
+            推断候选转正为 draft 实体/绑定，人工审批后生效（不做自动晋升）
+          </span>
+        </div>
+        {promoteOpen ? (
+          <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+            <textarea
+              className="h-40 w-full rounded border border-slate-300 p-2 font-mono text-xs"
+              placeholder={`{"entities":[{"name":"Lot","nameCn":"批次","table":"v_anom_wafer","idColumn":"id","attributes":[{"name":"lot","sourceColumn":"lot"}],"relations":[{"name":"lots","to":"AnomWafer","sourceField":"lot","targetField":"lot_id"}]}]}`}
+              value={promoteJson}
+              onChange={(e) => setPromoteJson(e.target.value)}
+            />
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={promote}
+                className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                晋升为 draft
+              </button>
+              {promoteResult ? <span className="text-xs text-slate-600">{promoteResult}</span> : null}
+            </div>
+          </div>
+        ) : null}
         <Table
           headers={["实体", "数据表", "ID 列", "状态", "操作"]}
           rows={context.bindings.map((b) => [

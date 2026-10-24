@@ -410,6 +410,77 @@ describe("P1-C governance — version lifecycle", () => {
   });
 });
 
+describe("P3-2 governance — POST /promote (DataLink candidates)", () => {
+  const candidateBody = {
+    entities: [
+      {
+        name: "PromotedLot",
+        nameCn: "批次",
+        table: "v_anom_wafer",
+        idColumn: "id",
+        description: "from datalink inference",
+        attributes: [
+          { name: "lot", displayName: "批次号", type: "string", sourceColumn: "lot" },
+          { name: "chamber_id", type: "string", sourceColumn: "chamber_id" }
+        ],
+        relations: [{ name: "lots_in_chamber", to: "AnomWafer", sourceField: "chamber_id", targetField: "chamber_id" }]
+      }
+    ]
+  };
+
+  it("creates draft entity/attributes/binding/relation, then reuses on a second promote", async () => {
+    const first = await postJson(["promote"], candidateBody);
+    expect(first.status).toBe(200);
+    const firstData = bodyOf(first).data as {
+      entities: Array<{ entity: string; reused: boolean; bindingCreated: boolean }>;
+    };
+    expect(firstData.entities[0]).toMatchObject({ entity: "PromotedLot", reused: false, bindingCreated: true });
+
+    // 落库形态：draft 实体 + 2 属性 + draft 绑定（mappings 对齐属性）+ 1 条关系
+    const entities = await call("GET", ["entities"], bodyRequest(""));
+    const promoted = (
+      (bodyOf(entities).data as { entities: Array<{ name: string; status: string; attributes: unknown[]; binding: { status: string } | null }> })
+        .entities.find((e) => e.name === "PromotedLot")
+    );
+    expect(promoted?.status).toBe("draft");
+    expect(promoted?.attributes).toHaveLength(2);
+    expect(promoted?.binding?.status).toBe("draft");
+
+    const second = await postJson(["promote"], candidateBody);
+    expect(second.status).toBe(200);
+    const secondData = bodyOf(second).data as { entities: Array<{ reused: boolean; bindingCreated: boolean }> };
+    expect(secondData.entities[0]).toMatchObject({ reused: true, bindingCreated: false });
+  });
+
+  it("rejects candidates missing name/table and unknown relation targets with rollback", async () => {
+    const bad = await postJson(["promote"], { entities: [{ table: "v_anom_wafer" }] });
+    expect(bad.status).toBe(400);
+
+    const badRelation = await postJson(["promote"], {
+      entities: [
+        {
+          name: "PromotedBroken",
+          table: "v_anom_wafer",
+          attributes: [{ name: "lot", sourceColumn: "lot" }],
+          relations: [{ name: "r", to: "NoSuchEntity", sourceField: "lot", targetField: "lot" }]
+        }
+      ]
+    });
+    expect(badRelation.status).toBe(400);
+    expect(bodyOf(badRelation).error?.message).toContain("NoSuchEntity");
+
+    // 回滚：失败候选的实体不落库
+    const entities = await call("GET", ["entities"], bodyRequest(""));
+    const names = (bodyOf(entities).data as { entities: Array<{ name: string }> }).entities.map((e) => e.name);
+    expect(names).not.toContain("PromotedBroken");
+  });
+
+  it("rejects non-POST methods with 405", async () => {
+    const response = await call("GET", ["promote"], bodyRequest(""));
+    expect(response.status).toBe(405);
+  });
+});
+
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {
     const response = await call("GET", ["nope"], bodyRequest(""));
