@@ -101,6 +101,38 @@ def ontology_run_logic(logic_name: LogicName, params: dict | None = None) -> Cal
 
 
 @mcp.tool()
+def ontology_context() -> CallToolResult:
+    """Return the ontology business context: entities, approved bindings,
+    relations, and registered logic functions.
+
+    This is the semantic grounding source for agent runs — tells the agent
+    WHAT business objects exist, HOW they relate, and WHAT computations
+    are available. Call this before making domain-specific queries.
+    """
+    try:
+        executor = get_executor()
+        bindings = executor.callbacks.query_rows(
+            "__ontology_bindings__", {}, limit=200
+        )
+        relations = executor.callbacks.query_rows(
+            "__ontology_relations__", {}, limit=200
+        )
+        functions = [
+            {"callable_name": spec.callable_name, "description": spec.description,
+             "input_schema": spec.input_schema}
+            for spec in executor.get_function_specs()
+        ]
+    except RuntimeError as err:
+        logger.warning("ontology_context failed: %s", err)
+        return _error_result(str(err))
+    return _json_result({
+        "bindings": bindings,
+        "relations": relations,
+        "logic_functions": functions,
+    })
+
+
+@mcp.tool()
 def ontology_query(
     entity: str,
     filters: dict | None = None,
