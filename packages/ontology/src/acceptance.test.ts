@@ -121,15 +121,20 @@ describe.skipIf(!READY)("acceptance — workbench 真实绑定 × golden 复跑�
     if (dsPath !== SPC_PATH) throw new Error("data_sources 路径与 skipIf 探针不一致");
 
     // ---- ① 绑定解析：ont_entities name→id → resolveBinding（契约 1 的闭环）----
-    // 迁移断言口径：approved 绑定恰为 14（Task 7 校验 ont_bindings == 14）
+    // 迁移断言口径（P3 起改为完整性自洽 + 迁移底线，不再硬编码恰数：
+    // Phase 2 T4 补 WindowConfig 已使 14→15，硬编码恰数在合法增绑定时误报）：
+    // - approved 绑定数 ≥ 14（迁移底线）；
+    // - approved 绑定数 == 有 approved 绑定的实体数（无重复绑定，自洽）。
     const approved = (wb.prepare("SELECT COUNT(*) AS n FROM ont_bindings WHERE status = 'approved'").get() as { n: number }).n;
-    if (approved !== 14) throw new Error(`ont_bindings approved 期望 14，实际 ${approved}（迁移数据问题）`);
+    if (approved < 14) throw new Error(`ont_bindings approved 低于迁移底线 14，实际 ${approved}（迁移数据问题）`);
 
     const bound = wb.prepare(
       "SELECT e.name AS name, e.id AS id FROM ont_entities e JOIN ont_bindings b ON b.entity_id = e.id "
       + "WHERE b.status = 'approved' ORDER BY e.name",
     ).all() as Array<{ name: string; id: string }>;
-    if (bound.length !== 14) throw new Error(`可解析绑定实体期望 14，实际 ${bound.length}（迁移数据问题）`);
+    if (bound.length !== approved) {
+      throw new Error(`approved 绑定 ${approved} 与可解析绑定实体 ${bound.length} 不一致（重复绑定，迁移数据问题）`);
+    }
 
     for (const { name, id } of bound) {
       // 直出规范化绑定：resolveBinding 内部经 ont_attributes（WHERE entity_id）还原属性名，

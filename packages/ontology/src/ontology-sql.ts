@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { inlineParams } from "./inline-params.js";
+import { bindParams } from "./inline-params.js";
 import type { Binding } from "./bindings.js";
 
 export function rewriteObjectNames(
@@ -23,11 +23,12 @@ export function executeOntologySql(
   for (const [entity, b] of Object.entries(bindings)) nameToTable[entity] = b.table;
   const { sql: rewritten, referenced } = rewriteObjectNames(sql, nameToTable);
   if (referenced.length === 0) throw new Error("SQL 未引用任何本体对象（白名单拒绝执行）");
-  const inlined = inlineParams(rewritten, params);
-  const stmt = conn.prepare(inlined);
+  // P3-3：字面量感知的 `:pN` → `?` 改写 + 原生参数绑定（替代 Phase 1 的字面量内联）
+  const bound = bindParams(rewritten, params);
+  const stmt = conn.prepare(bound.sql);
   const columns = stmt.columns().map(c => c.name);
   // node:sqlite 默认行形态是对象（同名列会折叠）；按列序还原为数组形态契约
-  const raw = stmt.all() as Record<string, unknown>[];
+  const raw = stmt.all(...(bound.values as never[])) as Record<string, unknown>[];
   const rows = raw.map(r => columns.map(c => r[c]));
   return { columns, rows, rowCount: rows.length };
 }

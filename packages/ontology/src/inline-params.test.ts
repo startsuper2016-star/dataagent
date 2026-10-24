@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { inlineParams } from "./inline-params.js";
+import { bindParams, inlineParams } from "./inline-params.js";
 
 describe("inlineParams", () => {
   it("inlines named params as literals", () => {
@@ -43,5 +43,52 @@ describe("inlineParams", () => {
   it("p1 vs p10 boundary does not cross-match", () => {
     const sql = inlineParams("SELECT :p1, :p10", { p1: "one", p10: "ten" });
     expect(sql).toBe("SELECT 'one', 'ten'");
+  });
+});
+
+describe("bindParams (P3-3 native binding)", () => {
+  it("rewrites literal-external :pN to ? and collects values in order", () => {
+    const bound = bindParams("SELECT * FROM t WHERE a = :p0 AND b = :p1", { p0: "x", p1: 5 });
+    expect(bound).toEqual({ sql: "SELECT * FROM t WHERE a = ? AND b = ?", values: ["x", 5] });
+  });
+
+  it("leaves :pN inside string literals untouched", () => {
+    const bound = bindParams("SELECT * FROM t WHERE a = 'a:p1' AND b = :p1", { p1: "v" });
+    expect(bound).toEqual({ sql: "SELECT * FROM t WHERE a = 'a:p1' AND b = ?", values: ["v"] });
+  });
+
+  it("does not eat p12 with p1 (long-key first plus right boundary)", () => {
+    const bound = bindParams("SELECT :p1 :p12", { p1: 1, p12: 2 });
+    expect(bound).toEqual({ sql: "SELECT ? ?", values: [1, 2] });
+  });
+
+  it("repeats a param occurrence as separate placeholders", () => {
+    const bound = bindParams("SELECT * FROM t WHERE a = :p0 OR b = :p0", { p0: "k" });
+    expect(bound).toEqual({ sql: "SELECT * FROM t WHERE a = ? OR b = ?", values: ["k", "k"] });
+  });
+
+  it("normalizes undefined to null and boolean to 1/0", () => {
+    const bound = bindParams("SELECT :p0, :p1, :p2", { p0: undefined, p1: true, p2: false });
+    expect(bound.values).toEqual([null, 1, 0]);
+  });
+
+  it("keeps unregistered keys in the SQL (prepare-time fail-closed)", () => {
+    const bound = bindParams("SELECT :p0, :x9", { p0: 1 });
+    expect(bound.sql).toBe("SELECT ?, :x9");
+    expect(bound.values).toEqual([1]);
+  });
+
+  it("rejects keys outside the ^p\d+(_\d+)?$ contract", () => {
+    expect(() => bindParams("SELECT 1", { evil: 1 })).toThrow(/参数键名不合法/);
+  });
+
+  it("executes end-to-end with native binding against node:sqlite", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE t(a TEXT)");
+    db.exec("INSERT INTO t VALUES ('safe'), ('x''; DROP TABLE t;--')");
+    const bound = bindParams("SELECT a FROM t WHERE a = :p0", { p0: "x'; DROP TABLE t;--" });
+    const stmt = db.prepare(bound.sql);
+    const rows = stmt.all(...(bound.values as never[])) as Array<{ a: string }>;
+    expect(rows).toEqual([{ a: "x'; DROP TABLE t;--" }]);
   });
 });
