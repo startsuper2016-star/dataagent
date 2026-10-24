@@ -101,7 +101,10 @@ import {
 } from "./protocol/model-analysis-contract-grounder.js";
 import type { AnalysisRequirement } from "./protocol/analysis-requirements.js";
 import type { DataAnalysisState } from "./protocol/protocols/data-analysis.js";
-import { createDefaultSemanticProvider } from "./semantic/default-semantic-provider.js";
+import {
+  createDefaultSemanticProvider,
+  type OntologyContextClient
+} from "./semantic/default-semantic-provider.js";
 import type { ProtocolEvent } from "./protocol/types.js";
 import type { ContextPackageRef, ProtocolStateStore } from "./protocol/types.js";
 import { toolErrorObservation as createToolErrorObservation } from "./errors/tool-execution-error.js";
@@ -272,6 +275,8 @@ export type CreateDataFoundryInput = {
   onProtocolEvent?(event: ProtocolEvent): void;
   protocolStateStore?: ProtocolStateStore;
   resourceRevisions?: Record<string, number>;
+  /** 本体语义上下文客户端（apps/api 注入，读 ont_* 表）；有本体建模的数据源优先走治理语义层。 */
+  ontologyContext?: OntologyContextClient;
   workspaceAttachments?: WorkspaceAttachment[];
   goal?: GoalRequest;
   /**
@@ -528,7 +533,10 @@ export const createDataFoundry = async (
       toolPlanEntries: agentToolPlanEntries,
       ...(selectedDatasourceId
         ? {
-            semanticProvider: createDefaultSemanticProvider({ tools: selectedTools }),
+            semanticProvider: createDefaultSemanticProvider({
+              tools: selectedTools,
+              ...(input.ontologyContext ? { ontologyContext: input.ontologyContext } : {})
+            }),
             semanticRequest: {
               userId: input.runContext.user_id,
               workspaceId: input.runContext.workspace_id ?? "default",
@@ -1552,6 +1560,7 @@ export type * from "./protocol/protocol-router.js";
 export type * from "./protocol/protocol-runtime.js";
 export type * from "./protocol/types.js";
 export { DataLinkSemanticProvider } from "./semantic/datalink-semantic-provider.js";
+export { OntologySemanticProvider, type OntologyContextClient } from "./semantic/ontology-semantic-provider.js";
 export { LocalSemanticProvider } from "./semantic/local-semantic-provider.js";
 export { SemanticProviderChain } from "./semantic/semantic-provider-chain.js";
 export { createDefaultSemanticProvider } from "./semantic/default-semantic-provider.js";

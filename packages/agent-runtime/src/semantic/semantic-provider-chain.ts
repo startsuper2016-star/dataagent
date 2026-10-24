@@ -16,6 +16,8 @@ export type SemanticSnapshot = {
 };
 
 export type SemanticProviderChainOptions = {
+  /** 治理审批过的本体语义层（可选）；命中即终态，未配置/不可用则落回 datalink。 */
+  ontology?: SemanticProvider;
   live: SemanticProvider;
   local: SemanticProvider;
   now?: () => number;
@@ -32,13 +34,30 @@ export class SemanticProviderChain {
 
   async resolve(request: SemanticRequest): Promise<SemanticResolution> {
     let fallbackReason: string | undefined;
+    if (this.options.ontology) {
+      try {
+        const result = await this.options.ontology.resolve(request);
+        return {
+          ...result,
+          provider: "ontology",
+          mode: "live",
+          datasourceRevision: request.datasourceRevision
+        };
+      } catch (error) {
+        if (!(error instanceof SemanticProviderError) || !error.fallbackAllowed) {
+          throw error;
+        }
+        fallbackReason = error.code;
+      }
+    }
     try {
       const result = await this.options.live.resolve(request);
       return {
         ...result,
         provider: "datalink",
         mode: "live",
-        datasourceRevision: request.datasourceRevision
+        datasourceRevision: request.datasourceRevision,
+        ...(fallbackReason ? { fallbackReason } : {})
       };
     } catch (error) {
       if (!(error instanceof SemanticProviderError) || !error.fallbackAllowed) {

@@ -17,6 +17,7 @@ import {
   type TaskStateRuntime,
   type WorkspaceAttachment
 } from "@datafoundry/agent-runtime";
+import type { OntologyContextClient } from "@datafoundry/agent-runtime";
 import type { DataGateway } from "@datafoundry/data-gateway";
 import type { FileAssetService } from "@datafoundry/files";
 import type { KnowledgeService } from "@datafoundry/knowledge";
@@ -60,6 +61,8 @@ type CreateRunAgentAssemblyInput = {
   abortSignal?: AbortSignal | undefined;
   artifactService: ArtifactService;
   dataGateway: DataGateway;
+  /** 本体语义上下文客户端（读 ont_* 表）；透传给 agent-runtime 的语义链。 */
+  ontologyContext?: OntologyContextClient | undefined;
   effectiveRunConfig: EffectiveRunConfig;
   emitter: AgUiEventEmitter;
   contextPackageRecorder?: ContextPackageRecorder;
@@ -172,6 +175,7 @@ export const createRunAgentAssembly = async (
     ...(input.effectiveRunConfig.resourceRevisions
       ? { resourceRevisions: input.effectiveRunConfig.resourceRevisions }
       : {}),
+    ...(input.ontologyContext ? { ontologyContext: input.ontologyContext } : {}),
     ...(input.modelSettings ? { modelSettings: input.modelSettings } : {}),
     ...(input.evidenceContextItems?.length ? { evidenceContextItems: input.evidenceContextItems } : {}),
     ...(input.longTermMemories.length > 0 ? { longTermMemory: { records: input.longTermMemories } } : {}),

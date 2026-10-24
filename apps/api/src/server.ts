@@ -61,6 +61,7 @@ import {
 import { assistantMessageIdFromEvent, completeProtocolRun } from "./protocol-run-completion.js";
 import { persistCurrentUserMessage } from "./conversation-memory.js";
 import { resolveEvidenceReferenceContext } from "./evidence-reference-context.js";
+import { createOntologyContextClient } from "./ontology-context-client.js";
 import { createRunAgentAssembly, createRunAgentContext } from "./run-agent-assembly.js";
 import { RunCheckpointProjector } from "./run-checkpoint-projector.js";
 import { TraceSectionCoordinator } from "./trace-section-coordinator.js";
@@ -693,6 +694,7 @@ class DataFoundryAgUiAgent extends AbstractAgent {
         const agentAssembly = await createRunAgentAssembly({
           abortSignal: runAbortController.signal,
           contextPackageRecorder,
+          ontologyContext: createOntologyContextClient(() => this.input.metadataStore.db),
           contextPackageExists: (reference) => Boolean(
             this.input.metadataStore.contextPackageSnapshots.findByPackageRevision({
               user_id: this.input.user.id,
