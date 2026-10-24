@@ -1,4 +1,4 @@
-import { createMetadataStore, createVerifiedTestIdentity } from "@datafoundry/metadata";
+import { createMetadataStore, createVerifiedTestIdentity, type MetadataStore } from "@datafoundry/metadata";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import type { EmbeddingService } from "./embedding-service.js";
 import { LocalKnowledgeService } from "./index.js";
 
 const roots: string[] = [];
+const stores: MetadataStore[] = [];
 
 const embeddingConfig = {
   api_key: "test-key",
@@ -22,6 +23,7 @@ const createHarness = (embeddingService?: EmbeddingService) => {
   const metadataStore = createMetadataStore({
     database_path: join(root, "metadata.sqlite")
   });
+  stores.push(metadataStore);
   const { userId, workspaceId } = createVerifiedTestIdentity(metadataStore);
   metadataStore.configResources.upsert({
     id: "kb-1",
@@ -46,6 +48,10 @@ const createHarness = (embeddingService?: EmbeddingService) => {
 };
 
 afterEach(() => {
+  // Windows 下打开中的 sqlite 文件会让 rmSync 失败（EBUSY），先关库再删目录
+  for (const store of stores.splice(0)) {
+    store.close();
+  }
   for (const root of roots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
   }

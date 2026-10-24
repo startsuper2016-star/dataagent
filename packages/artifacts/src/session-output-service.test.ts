@@ -1,5 +1,5 @@
 import { LocalFileAssetService } from "@datafoundry/files";
-import { createMetadataStore, createVerifiedTestIdentity } from "@datafoundry/metadata";
+import { createMetadataStore, createVerifiedTestIdentity, type MetadataStore } from "@datafoundry/metadata";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SessionOutputService } from "./session-output-service.js";
 
 const roots: string[] = [];
+const stores: MetadataStore[] = [];
 
 const createTestServices = () => {
   const root = mkdtempSync(join(tmpdir(), "session-output-service-"));
@@ -15,6 +16,7 @@ const createTestServices = () => {
   const metadataStore = createMetadataStore({
     database_path: join(root, "metadata.sqlite")
   });
+  stores.push(metadataStore);
   const { userId, workspaceId } = createVerifiedTestIdentity(metadataStore, {
     email: "user@example.com",
     displayName: "Test User",
@@ -50,6 +52,10 @@ const createTestServices = () => {
 };
 
 afterEach(() => {
+  // Windows 下打开中的 sqlite 文件会让 rmSync 失败（EBUSY），先关库再删目录
+  for (const store of stores.splice(0)) {
+    store.close();
+  }
   for (const root of roots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
   }

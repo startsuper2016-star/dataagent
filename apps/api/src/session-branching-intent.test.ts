@@ -25,7 +25,11 @@ describe("session branch intent pinning", () => {
     });
   });
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  afterEach(() => {
+    // Windows 下打开中的 sqlite 文件会让 rmSync 失败（EBUSY），先关库再删目录
+    metadata.close();
+    rmSync(root, { recursive: true, force: true });
+  });
 
   const seedRevisions = () => {
     const first = metadata.sessionIntents.upsert({
