@@ -18,6 +18,7 @@ import { type MeResponse, createEnvConfig, createErrorResult, createSuccessResul
 import { LocalDataGateway } from "@datafoundry/data-gateway";
 import { LocalFileAssetService } from "@datafoundry/files";
 import { LocalKnowledgeService } from "@datafoundry/knowledge";
+import { ensureOntologyTables } from "@datafoundry/ontology";
 import {
   RunEventWriter,
   createMetadataStore,
@@ -179,6 +180,9 @@ export const createServer = async (options: CreateServerOptions = {}): Promise<S
       ...(envConfig.storage.secret_master_key ? { secret_master_key: envConfig.storage.secret_master_key } : {})
     }),
   );
+  // ont_* 表只在 migrate-yuanshu 里建过：未跑迁移的新环境会让每个 run 静默失去本体语义层
+  // （OntologySemanticProvider 逐 run 降级为 fallback）。DDL 全幂等，启动时兜底补齐。
+  timer.measure("ontology_tables", () => ensureOntologyTables(metadataStore.db));
   const fileAssetService = new LocalFileAssetService(metadataStore, {
     storageRoot: process.env.FILE_ASSET_STORAGE_ROOT ?? join(envConfig.storage.root_dir, "files")
   });

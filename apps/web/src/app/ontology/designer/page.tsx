@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { ontologyFetch } from "../../../lib/ontology-client";
+
 type Attribute = {
   id: string;
   name: string;
@@ -40,6 +42,7 @@ export default function OntologyDesignerPage() {
   const [entities, setEntities] = useState<EntityRow[]>([]);
   const [relations, setRelations] = useState<RelationRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // 实体表单：editing=null → 新建；否则为被编辑实体名
@@ -110,101 +113,125 @@ export default function OntologyDesignerPage() {
 
   const saveEntity = async () => {
     setMessage(null);
-    const body = {
-      ...(editing ? {} : { name }),
-      nameCn: nameCn || undefined,
-      description: description || undefined,
-      attributes: attrs
-        .filter((a) => a.name.trim())
-        .map((a) => ({
-          name: a.name.trim(),
-          displayName: a.displayName || undefined,
-          type: a.type,
-          required: a.required
-        }))
-    };
-    const res = await fetch(
-      editing ? `/api/v1/ontology/entities/${encodeURIComponent(editing)}` : "/api/v1/ontology/entities",
-      {
-        method: editing ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify(body)
+    setSaving(true);
+    try {
+      const body = {
+        ...(editing ? {} : { name }),
+        nameCn: nameCn || undefined,
+        description: description || undefined,
+        attributes: attrs
+          .filter((a) => a.name.trim())
+          .map((a) => ({
+            name: a.name.trim(),
+            displayName: a.displayName || undefined,
+            type: a.type,
+            required: a.required
+          }))
+      };
+      const res = await ontologyFetch(
+        editing ? `/api/v1/ontology/entities/${encodeURIComponent(editing)}` : "/api/v1/ontology/entities",
+        {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        }
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
+        return;
       }
-    );
-    const json = await res.json();
-    if (!res.ok) {
-      setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
-      return;
+      setFormOpen(false);
+      await reload();
+      setMessage({
+        kind: "ok",
+        text: editing
+          ? `✅ 实体 ${editing} 已更新`
+          : `✅ 实体 ${name} 已创建（draft）— 下一步到绑定编辑器关联物理表`
+      });
+    } catch (error) {
+      setMessage({ kind: "err", text: String(error) });
+    } finally {
+      setSaving(false);
     }
-    setFormOpen(false);
-    await reload();
-    setMessage({
-      kind: "ok",
-      text: editing
-        ? `✅ 实体 ${editing} 已更新`
-        : `✅ 实体 ${name} 已创建（draft）— 下一步到绑定编辑器关联物理表`
-    });
   };
 
   const deleteEntity = async (entityName: string) => {
     if (!window.confirm(`删除实体 ${entityName}？其属性、draft 绑定与相关关系将一并删除。`)) return;
     setMessage(null);
-    const res = await fetch(`/api/v1/ontology/entities/${encodeURIComponent(entityName)}`, {
-      method: "DELETE",
-      credentials: "same-origin"
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
-      return;
+    setSaving(true);
+    try {
+      const res = await ontologyFetch(`/api/v1/ontology/entities/${encodeURIComponent(entityName)}`, {
+        method: "DELETE"
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
+        return;
+      }
+      await reload();
+      setMessage({ kind: "ok", text: `✅ 实体 ${entityName} 已删除` });
+    } catch (error) {
+      setMessage({ kind: "err", text: String(error) });
+    } finally {
+      setSaving(false);
     }
-    await reload();
-    setMessage({ kind: "ok", text: `✅ 实体 ${entityName} 已删除` });
   };
 
   const saveRelation = async () => {
     setMessage(null);
-    const res = await fetch("/api/v1/ontology/relations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({
-        name: relName,
-        fromEntity: relFrom,
-        toEntity: relTo,
-        cardinality: relCardinality,
-        sourceField: relSourceField || undefined,
-        targetField: relTargetField || undefined
-      })
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
-      return;
+    setSaving(true);
+    try {
+      const res = await ontologyFetch("/api/v1/ontology/relations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: relName,
+          fromEntity: relFrom,
+          toEntity: relTo,
+          cardinality: relCardinality,
+          sourceField: relSourceField || undefined,
+          targetField: relTargetField || undefined
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
+        return;
+      }
+      setRelOpen(false);
+      setRelName("");
+      setRelSourceField("");
+      setRelTargetField("");
+      await reload();
+      setMessage({ kind: "ok", text: `✅ 关系 ${relName} 已创建` });
+    } catch (error) {
+      setMessage({ kind: "err", text: String(error) });
+    } finally {
+      setSaving(false);
     }
-    setRelOpen(false);
-    setRelName("");
-    setRelSourceField("");
-    setRelTargetField("");
-    await reload();
-    setMessage({ kind: "ok", text: `✅ 关系 ${relName} 已创建` });
   };
 
   const deleteRelation = async (relation: RelationRow) => {
     if (!window.confirm(`删除关系 ${relation.from_entity} -${relation.name}-> ${relation.to_entity}？`)) return;
     setMessage(null);
-    const res = await fetch(`/api/v1/ontology/relations/${encodeURIComponent(relation.id)}`, {
-      method: "DELETE",
-      credentials: "same-origin"
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
-      return;
+    setSaving(true);
+    try {
+      const res = await ontologyFetch(`/api/v1/ontology/relations/${encodeURIComponent(relation.id)}`, {
+        method: "DELETE"
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setMessage({ kind: "err", text: json.error?.message ?? `HTTP ${res.status}` });
+        return;
+      }
+      await reload();
+      setMessage({ kind: "ok", text: `✅ 关系 ${relation.name} 已删除` });
+    } catch (error) {
+      setMessage({ kind: "err", text: String(error) });
+    } finally {
+      setSaving(false);
     }
-    await reload();
-    setMessage({ kind: "ok", text: `✅ 关系 ${relation.name} 已删除` });
   };
 
   if (loading)
@@ -356,10 +383,10 @@ export default function OntologyDesignerPage() {
               <button
                 type="button"
                 onClick={saveEntity}
-                disabled={editing ? false : !name.trim()}
+                disabled={saving || (editing ? false : !name.trim())}
                 className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {editing ? `保存 ${editing}` : "创建实体（draft）"}
+                {saving ? "保存中…" : editing ? `保存 ${editing}` : "创建实体（draft）"}
               </button>
               <button
                 type="button"
@@ -487,14 +514,15 @@ export default function OntologyDesignerPage() {
               <button
                 type="button"
                 onClick={saveRelation}
-                disabled={!relName.trim() || !relFrom || !relTo}
+                disabled={saving || !relName.trim() || !relFrom || !relTo}
                 className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                创建关系
+                {saving ? "创建中…" : "创建关系"}
               </button>
             </div>
             <p className="mt-2 text-xs text-slate-400">
-              源/目标字段是 traverse 编译 JOIN 用的物理列名（标识符白名单）；两端实体绑定审批后，关系即可被遍历查询使用。
+              源/目标字段填两端的<b>属性名</b>（traverse 编译 JOIN 时经绑定映射翻译为物理列，填未映射的列名会报"关系字段未映射"）；
+              两端实体绑定审批后，关系即可被遍历查询使用。
             </p>
           </div>
         ) : null}

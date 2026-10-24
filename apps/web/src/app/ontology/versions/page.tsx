@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { ontologyFetch } from "../../lib/ontology-client";
+
 type VersionRow = {
   id: string;
   version_number: number;
@@ -59,10 +61,9 @@ export default function VersionsPage() {
 
   const create = async () => {
     setMessage(null);
-    const res = await fetch("/api/v1/ontology/versions", {
+    const res = await ontologyFetch("/api/v1/ontology/versions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
       body: JSON.stringify({ name, entityIds: [...selected] })
     });
     const json = await res.json();
@@ -89,9 +90,8 @@ export default function VersionsPage() {
 
   const submit = async (id: string) => {
     setMessage(null);
-    const res = await fetch(`/api/v1/ontology/versions/${id}/submit`, {
-      method: "POST",
-      credentials: "same-origin"
+    const res = await ontologyFetch(`/api/v1/ontology/versions/${id}/submit`, {
+      method: "POST"
     });
     const json = await res.json();
     if (!res.ok) {
@@ -105,9 +105,8 @@ export default function VersionsPage() {
 
   const publish = async (id: string) => {
     setMessage(null);
-    const res = await fetch(`/api/v1/ontology/versions/${id}/publish`, {
-      method: "POST",
-      credentials: "same-origin"
+    const res = await ontologyFetch(`/api/v1/ontology/versions/${id}/publish`, {
+      method: "POST"
     });
     const json = await res.json();
     if (!res.ok) {

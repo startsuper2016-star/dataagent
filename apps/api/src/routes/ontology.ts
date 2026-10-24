@@ -51,7 +51,8 @@ import type { ConfigApiContext, ConfigApiResponse } from "./types.js";
  * - GET  /api/v1/ontology/versions/:id            → 版本详情（含实体清单与一致性检查）
  * - POST /api/v1/ontology/versions/:id/submit     → 一致性检查全过 → 快照组件 → submitted
  * - POST /api/v1/ontology/versions/:id/publish    → submitted → published
- * - POST /api/v1/ontology/promote                 → DataLink 候选转正（实体/属性/关系 draft，人工审批）
+ * - DELETE /api/v1/ontology/versions/:id          → 仅 draft 版本可删（登记行一并清）
+ * - POST /api/v1/ontology/promote                 → DataLink 候选转正（实体/属性/关系 draft，人工审批，名/字段同设计器白名单）
  *
  * 写守卫：与会话认证同惯例（config-api 分发链已解析 session/bearer），无独立角色体系；
  * 写面仅限 ont_* 表，物理数据连接保持 readOnly。
@@ -65,6 +66,8 @@ export type OntologyRouteContext = Pick<ConfigApiContext, "metadataStore" | "use
 
 const SPC_DATASOURCE_NAME = "SPC_MVP_SQLITE";
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
+/** 关系基数枚举（设计器与 promote 共用；会落 ont_relations 并在治理面展示）。 */
+const CARDINALITY_VALUES = ["1:1", "1:N", "N:1", "N:N"];
 
 /**
  * 数据连接缓存：path → DatabaseSync。数据源行改指新库（新 path）即自然重建连接；
@@ -98,7 +101,16 @@ export const handleOntologyRequest = async (
 ): Promise<ConfigApiResponse> => {
   try {
     const db = context.metadataStore.db;
-    switch (subPath[0] ?? "") {
+    // config-api 按 pathname.split("/") 切段不解码；浏览器/Next BFF 侧 encodeURIComponent 过的
+    // 中文实体名到这里仍是 %XX 形态，必须先解码（与 config-api 其他路由的 decode 惯例对齐）。
+    const path = subPath.map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        throw new OntologyHttpError(400, "BAD_REQUEST", `路径段编码非法: ${segment}`);
+      }
+    });
+    switch (path[0] ?? "") {
       case "query":
         return await handleQuery(request, method, context);
       case "sql":
@@ -106,21 +118,21 @@ export const handleOntologyRequest = async (
       case "traverse":
         return await handleTraverse(request, method, context);
       case "bindings":
-        return await handleBindingsRoute(request, method, subPath.slice(1), context);
+        return await handleBindingsRoute(request, method, path.slice(1), context);
       case "context":
         return handleContext(method, db);
       case "entities":
-        return await handleEntitiesRoute(request, method, subPath.slice(1), context);
+        return await handleEntitiesRoute(request, method, path.slice(1), context);
       case "relations":
-        return await handleRelationsRoute(request, method, subPath.slice(1), context);
+        return await handleRelationsRoute(request, method, path.slice(1), context);
       case "datasource":
-        return await handleDatasourceTables(method, subPath.slice(1), context);
+        return await handleDatasourceTables(method, path.slice(1), context);
       case "versions":
-        return await handleVersionsRoute(request, method, subPath.slice(1), context);
+        return await handleVersionsRoute(request, method, path.slice(1), context);
       case "promote":
         return await handlePromote(request, method, context);
       default:
-        throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知本体端点: ${subPath[0] ?? ""}`);
+        throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知本体端点: ${path[0] ?? ""}`);
     }
   } catch (error) {
     return ontologyErrorResponse(error);
@@ -243,6 +255,14 @@ const handleBindingUpdate = async (
   }
   const conn = openSpcConnection(context.metadataStore, context.userId);
   assertTableAndColumns(conn, table, idColumn, mappings);
+  // attribute_id 空串要到查询期 resolveBinding 才炸，门口拒绝（bindings 页只发实体属性 id，防御 promote/手拼请求）
+  for (const mapping of mappings) {
+    const attributeId = typeof mapping.attribute_id === "string" ? mapping.attribute_id.trim() : "";
+    const sourceColumn = typeof mapping.source_column === "string" ? mapping.source_column.trim() : "";
+    if (!attributeId || !sourceColumn) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "fieldMappings 每项都需要非空 attribute_id 和 source_column");
+    }
+  }
   const mappingsJson = JSON.stringify(
     mappings.map((m) => ({ attribute_id: String(m.attribute_id ?? ""), source_column: String(m.source_column ?? "") }))
   );
@@ -250,7 +270,7 @@ const handleBindingUpdate = async (
     | { id: string }
     | undefined;
   if (!existing) {
-    const datasourceId = resolvePromotionDatasourceId(context, stringValue(body.datasourceId));
+    const datasourceId = resolvePromotionDatasourceId(context, stringValue(body.datasourceId), db);
     const bindingId = randomUUID();
     db.prepare(
       "INSERT INTO ont_bindings (id, entity_id, datasource_id, table_name, id_column, field_mappings_json, status) VALUES (?, ?, ?, ?, ?, ?, 'draft')"
@@ -283,24 +303,24 @@ const handleBindingApprove = (
     .prepare("SELECT table_name, id_column, field_mappings_json FROM ont_bindings WHERE id = ?")
     .get(bindingId) as { table_name: string; id_column: string; field_mappings_json: string };
   const mappings = safeJsonParse(binding.field_mappings_json);
-  if (!Array.isArray(mappings) || mappings.length === 0) {
+  const mapped = mappingCount(mappings);
+  if (mapped === 0) {
     throw new OntologyHttpError(400, "BAD_REQUEST", "字段映射为空，无法审批");
   }
   const conn = openSpcConnection(context.metadataStore, context.userId);
-  assertTableAndColumns(
-    conn,
-    binding.table_name,
-    binding.id_column,
-    mappings as { attribute_id?: unknown; source_column?: unknown }[]
-  );
+  // Record 形态（键=属性名、值=物理列）同样要做物理列存在性校验
+  const mappingsForValidation = Array.isArray(mappings)
+    ? (mappings as { attribute_id?: unknown; source_column?: unknown }[])
+    : Object.values(mappings as Record<string, string>).map((column) => ({ source_column: column }));
+  assertTableAndColumns(conn, binding.table_name, binding.id_column, mappingsForValidation);
   const total = db.prepare("SELECT COUNT(*) AS n FROM ont_attributes WHERE entity_id = ?").get(entityId) as {
     n: number;
   };
-  if (total.n > 0 && mappings.length * 2 < total.n) {
+  if (total.n > 0 && mapped * 2 < total.n) {
     throw new OntologyHttpError(
       400,
       "BAD_REQUEST",
-      `映射覆盖 ${mappings.length}/${total.n} 低于 50%，无法审批`
+      `映射覆盖 ${mapped}/${total.n} 低于 50%，无法审批`
     );
   }
   db.prepare("UPDATE ont_bindings SET status = 'approved' WHERE id = ?").run(bindingId);
@@ -332,7 +352,7 @@ const handleEntitiesRoute = async (
   if (rest.length === 1 && method === "DELETE") {
     return handleEntityDelete(entityName, db);
   }
-  throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（实体端点支持 GET/POST/PUT/DELETE）: ${method ?? ""}`);
+  throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（实体项端点支持 PUT/DELETE）: ${method ?? ""}`);
 };
 
 /** GET /entities 的行构造器：实体 + 属性 + 最新绑定（POST/PUT 返回同构，UI 免二次拉取）。 */
@@ -534,6 +554,12 @@ const handleEntityDelete = (entityName: string, db: DatabaseSync): ConfigApiResp
   if (entity.status !== "draft") {
     throw new OntologyHttpError(409, "CONFLICT", `实体状态为 ${entity.status}，仅 draft 实体可删除`);
   }
+  const approvedBinding = db
+    .prepare("SELECT 1 FROM ont_bindings WHERE entity_id = ? AND status = 'approved'")
+    .get(entity.id);
+  if (approvedBinding) {
+    throw new OntologyHttpError(409, "CONFLICT", "实体存在已审批绑定（删除会连带生效绑定），先在绑定编辑器打回 draft 再删");
+  }
   const inVersion = db.prepare("SELECT 1 FROM ont_version_entities WHERE source_entity_id = ?").get(entity.id);
   if (inVersion) {
     throw new OntologyHttpError(409, "CONFLICT", "实体已被版本登记，先移出版本或删除版本");
@@ -584,7 +610,7 @@ const handleRelationCreate = async (
     throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 name/fromEntity/toEntity");
   }
   const cardinality = stringValue(body.cardinality) ?? "1:N";
-  if (!["1:1", "1:N", "N:1", "N:N"].includes(cardinality)) {
+  if (!CARDINALITY_VALUES.includes(cardinality)) {
     throw new OntologyHttpError(400, "BAD_REQUEST", `cardinality 仅支持 1:1/1:N/N:1/N:N: ${cardinality}`);
   }
   const sourceField = stringValue(body.sourceField);
@@ -679,6 +705,9 @@ const handleVersionsRoute = async (
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少版本 ID");
   }
   if (rest.length === 1) {
+    if (method === "DELETE") {
+      return handleVersionDelete(versionId, db);
+    }
     requireMethod(method, "GET");
     return ok(versionDetail(db, versionId));
   }
@@ -798,6 +827,21 @@ const handleVersionPublish = (versionId: string, db: DatabaseSync): ConfigApiRes
   return ok(versionDetail(db, versionId));
 };
 
+/** DELETE /versions/:id —— 仅 draft 版本可删（误建版本的退出口；登记行一并清）。 */
+const handleVersionDelete = (versionId: string, db: DatabaseSync): ConfigApiResponse => {
+  requireVersion(db, versionId, "draft");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM ont_version_entities WHERE version_id = ?").run(versionId);
+    db.prepare("DELETE FROM ont_versions WHERE id = ?").run(versionId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ok({ deleted: versionId });
+};
+
 /** POST /promote —— DataLink 推断候选人工转正：实体/属性/绑定/关系落 draft，走既有审批流。 */
 const handlePromote = async (
   request: IncomingMessage,
@@ -811,7 +855,7 @@ const handlePromote = async (
   if (!candidates || candidates.length === 0) {
     throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 entities 候选清单");
   }
-  const datasourceId = resolvePromotionDatasourceId(context, stringValue(body.datasourceId));
+  const datasourceId = resolvePromotionDatasourceId(context, stringValue(body.datasourceId), db);
   const ontologyId = requireOntologyId(db);
 
   const insertEntity = db.prepare(
@@ -836,7 +880,31 @@ const handlePromote = async (
       if (!name || !table) {
         throw new OntologyHttpError(400, "BAD_REQUEST", "候选缺少 name 或 table");
       }
+      // 实体名会进 rewriteObjectNames 的正则与 SQL 引号拼接，表名/列名会双引号拼接——
+      // promote 与设计器同守卫，必须在落库前拒绝（.* 可击穿 /sql 白名单门，( 直接炸正则）。
+      if (!isSafeIdentifier(name) || !isSafeIdentifier(table)) {
+        throw new OntologyHttpError(400, "BAD_REQUEST", `候选 name/table 含非法字符（仅字母/数字/下划线/中文）: ${name} / ${table}`);
+      }
       const attrs = arrayValue(candidate.attributes) ?? [];
+      const attrNames = new Set<string>();
+      for (const attr of attrs) {
+        const attrName = stringValue(attr.name);
+        if (!attrName || !isSafeIdentifier(attrName)) {
+          throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${name} 存在缺 name 或含非法字符的属性: ${attrName ?? ""}`);
+        }
+        if (attrNames.has(attrName)) {
+          throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${name} 属性名重复: ${attrName}`);
+        }
+        attrNames.add(attrName);
+        const sourceColumn = stringValue(attr.sourceColumn);
+        if (sourceColumn && !isSafeIdentifier(sourceColumn)) {
+          throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${name} 属性 ${attrName} 的 sourceColumn 含非法字符: ${sourceColumn}`);
+        }
+      }
+      const idColumn = stringValue(candidate.idColumn) ?? "id";
+      if (!isSafeIdentifier(idColumn)) {
+        throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${name} 的 idColumn 含非法字符: ${idColumn}`);
+      }
       const existing = db.prepare("SELECT id FROM ont_entities WHERE name = ?").get(name) as
         | { id: string }
         | undefined;
@@ -850,14 +918,10 @@ const handlePromote = async (
         reused = false;
         insertEntity.run(entityId, ontologyId, name, stringValue(candidate.nameCn) ?? null, stringValue(candidate.description) ?? null);
         attrs.forEach((attr, index) => {
-          const attrName = stringValue(attr.name);
-          if (!attrName) {
-            throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${name} 存在缺 name 的属性`);
-          }
           insertAttribute.run(
             randomUUID(),
             entityId,
-            attrName,
+            stringValue(attr.name) ?? "",
             stringValue(attr.displayName) ?? null,
             stringValue(attr.type) ?? "string",
             index
@@ -870,17 +934,10 @@ const handlePromote = async (
         .get(entityId) as { id: string } | undefined;
       let bindingId: string | undefined;
       if (!existingBinding) {
-        const idColumn = stringValue(candidate.idColumn) ?? "id";
         bindingId = randomUUID();
         const attributeRows = db
           .prepare("SELECT id, name FROM ont_attributes WHERE entity_id = ?")
           .all(entityId) as Array<{ id: string; name: string }>;
-        const columns = new Set(
-          (arrayValue(candidate.attributes) ?? [])
-            .map((a) => stringValue(a.sourceColumn))
-            .filter((c): c is string => Boolean(c))
-        );
-        const idColumns = columns.has(idColumn) ? idColumn : (stringValue(candidate.idColumn) ?? "id");
         const mappings = attributeRows
           .map((row) => {
             const candidateAttr = (arrayValue(candidate.attributes) ?? []).find(
@@ -889,7 +946,7 @@ const handlePromote = async (
             const sourceColumn = stringValue(candidateAttr?.sourceColumn) ?? row.name;
             return { attribute_id: row.id, source_column: sourceColumn };
           });
-        insertBinding.run(bindingId, entityId, datasourceId, table, idColumns, JSON.stringify(mappings));
+        insertBinding.run(bindingId, entityId, datasourceId, table, idColumn, JSON.stringify(mappings));
       }
       results.push({
         entity: name,
@@ -908,6 +965,18 @@ const handlePromote = async (
         if (!relName || !toName) {
           throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${fromName} 存在不完整关系（缺 name/to）`);
         }
+        // source/target_field 是属性名（fieldMap 键，traverse 编译时翻译为物理列），同属性名白名单
+        const sourceField = stringValue(rel.sourceField);
+        const targetField = stringValue(rel.targetField);
+        for (const field of [sourceField, targetField]) {
+          if (field && !isSafeIdentifier(field)) {
+            throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${fromName} 关系字段含非法字符: ${field}`);
+          }
+        }
+        const cardinality = stringValue(rel.cardinality) ?? "1:N";
+        if (!CARDINALITY_VALUES.includes(cardinality)) {
+          throw new OntologyHttpError(400, "BAD_REQUEST", `候选 ${fromName} 关系 cardinality 仅支持 1:1/1:N/N:1/N:N: ${cardinality}`);
+        }
         const from = db.prepare("SELECT id FROM ont_entities WHERE name = ?").get(fromName) as { id: string };
         const to = db.prepare("SELECT id FROM ont_entities WHERE name = ?").get(toName);
         if (!to) {
@@ -922,9 +991,9 @@ const handlePromote = async (
             from.id,
             (to as { id: string }).id,
             relName,
-            stringValue(rel.cardinality) ?? "1:N",
-            stringValue(rel.sourceField) ?? null,
-            stringValue(rel.targetField) ?? null,
+            cardinality,
+            sourceField ?? null,
+            targetField ?? null,
             stringValue(rel.description) ?? null
           );
         }
@@ -942,12 +1011,16 @@ const handlePromote = async (
   });
 };
 
-/** 晋升目标数据源：body.datasourceId 优先，缺省解析当前用户的 SPC 数据源。 */
+/** 晋升目标数据源：body.datasourceId 优先（须为已存在行，杜绝 typo 产孤儿绑定），缺省解析当前用户的 SPC 数据源。 */
 const resolvePromotionDatasourceId = (
   context: OntologyRouteContext,
-  explicitId: string | undefined
+  explicitId: string | undefined,
+  db: DatabaseSync
 ): string => {
   if (explicitId) {
+    if (!db.prepare("SELECT 1 FROM data_sources WHERE id = ?").get(explicitId)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `数据源不存在: ${explicitId}`);
+    }
     return explicitId;
   }
   const ds = context.metadataStore.db
@@ -993,13 +1066,24 @@ const checkEntityConsistency = (
   if (!binding.id_column) {
     return { entity: name, ok: false, reason: "未登记 id_column" };
   }
-  const mappings = safeJsonParse(binding.field_mappings_json);
-  const mapped = Array.isArray(mappings) ? mappings.length : 0;
+  const mapped = mappingCount(safeJsonParse(binding.field_mappings_json));
   const total = (db.prepare("SELECT COUNT(*) AS n FROM ont_attributes WHERE entity_id = ?").get(entityId) as { n: number }).n;
   if (total > 0 && mapped * 2 < total) {
     return { entity: name, ok: false, reason: `映射覆盖 ${mapped}/${total} 低于 50%` };
   }
   return { entity: name, ok: true };
+};
+
+/**
+ * 映射条数（审批覆盖率/一致性检查共用）：数组形态按条目数，Record 形态（键=属性名的历史
+ * 数据，normalizeFieldMap 同样支持）按键数计——按 0 计会把合法的历史绑定卡死在提交门。
+ */
+const mappingCount = (parsed: unknown): number => {
+  if (Array.isArray(parsed)) {
+    return parsed.length;
+  }
+  const record = recordValue(parsed);
+  return record ? Object.keys(record).length : 0;
 };
 
 const requireVersion = (

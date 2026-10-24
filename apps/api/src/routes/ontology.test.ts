@@ -102,7 +102,9 @@ const seedMetadata = (spcDbPath: string): void => {
     INSERT INTO ont_attributes (id, entity_id, name) VALUES
       ('attr-w1', '${EID.wafer}', 'wafer_id'),
       ('attr-w2', '${EID.wafer}', 'chamber_id'),
-      ('attr-w3', '${EID.wafer}', 'lot');
+      ('attr-w3', '${EID.wafer}', 'lot'),
+      ('attr-t1', '${EID.tool}', 'chamber_id'),
+      ('attr-t2', '${EID.tool}', 'event_name');
     INSERT INTO ont_bindings (id, entity_id, datasource_id, table_name, id_column, field_mappings_json, status) VALUES
       ('bind-wafer', '${EID.wafer}', '${SPC_DATASOURCE_ID}', 'v_anom_wafer', 'id',
        '[{"attribute_id":"attr-w1","source_column":"wafer_id"},{"attribute_id":"attr-w2","source_column":"chamber_id"},{"attribute_id":"attr-w3","source_column":"lot"}]',
@@ -413,6 +415,25 @@ describe("P1-C governance — version lifecycle", () => {
     const response = await call("GET", ["versions", "nope"], bodyRequest(""));
     expect(response.status).toBe(404);
   });
+
+  it("deletes draft versions but refuses submitted/published ones", async () => {
+    const draft = await postJson(["versions"], { name: "v-deletable", entityIds: [EID.wafer] });
+    const draftId = (bodyOf(draft).data as { id: string }).id;
+    const deleted = await delJson(["versions", draftId]);
+    expect(deleted.status).toBe(200);
+    const gone = await call("GET", ["versions", draftId], bodyRequest(""));
+    expect(gone.status).toBe(404);
+
+    // 登记行一并清：实体可再入新版本（无悬空登记）
+    const reused = await postJson(["versions"], { name: "v-reuse", entityIds: [EID.wafer] });
+    expect(reused.status).toBe(200);
+
+    const submitted = await postJson(["versions"], { name: "v-submitted", entityIds: [EID.wafer] });
+    const submittedId = (bodyOf(submitted).data as { id: string }).id;
+    await call("POST", ["versions", submittedId, "submit"], bodyRequest({}));
+    const blocked = await delJson(["versions", submittedId]);
+    expect(blocked.status).toBe(409);
+  });
 });
 
 describe("P3-2 governance — POST /promote (DataLink candidates)", () => {
@@ -483,6 +504,49 @@ describe("P3-2 governance — POST /promote (DataLink candidates)", () => {
   it("rejects non-POST methods with 405", async () => {
     const response = await call("GET", ["promote"], bodyRequest(""));
     expect(response.status).toBe(405);
+  });
+
+  it("enforces the same identifier/cardinality whitelist as the designer (rollback on reject)", async () => {
+    // 正则元字符实体名会炸 rewriteObjectNames 的内插正则（.* 还能击穿 /sql 白名单门）
+    const badName = await postJson(["promote"], { entities: [{ name: "订单(", table: "v_anom_wafer" }] });
+    expect(badName.status).toBe(400);
+    expect(bodyOf(badName).error?.message).toContain("非法字符");
+
+    const badAttr = await postJson(["promote"], {
+      entities: [{ name: "PromotedOk", table: "v_anom_wafer", attributes: [{ name: "a\"b" }] }]
+    });
+    expect(badAttr.status).toBe(400);
+
+    const duplicateAttr = await postJson(["promote"], {
+      entities: [{
+        name: "PromotedDup",
+        table: "v_anom_wafer",
+        attributes: [{ name: "lot" }, { name: "lot", sourceColumn: "wafer_id" }]
+      }]
+    });
+    expect(duplicateAttr.status).toBe(400);
+    expect(bodyOf(duplicateAttr).error?.message).toContain("属性名重复");
+
+    const badCardinality = await postJson(["promote"], {
+      entities: [{
+        name: "PromotedCard",
+        table: "v_anom_wafer",
+        relations: [{ name: "r", to: "AnomWafer", cardinality: "many" }]
+      }]
+    });
+    expect(badCardinality.status).toBe(400);
+
+    const badDatasource = await postJson(["promote"], {
+      datasourceId: "ds-does-not-exist",
+      entities: [{ name: "PromotedDs", table: "v_anom_wafer" }]
+    });
+    expect(badDatasource.status).toBe(400);
+    expect(bodyOf(badDatasource).error?.message).toContain("数据源不存在");
+
+    // 全部拒绝后无残留（事务回滚）
+    const entities = await call("GET", ["entities"], bodyRequest(""));
+    const names = (bodyOf(entities).data as { entities: Array<{ name: string }> }).entities.map((e) => e.name);
+    expect(names.filter((n) => n.startsWith("Promoted"))).toEqual([]);
   });
 });
 
@@ -630,6 +694,54 @@ describe("P3-4 designer — entity modeling", () => {
     const query = await postJson(["query"], { entity: "FreshEntity" });
     expect(query.status).toBe(200);
     expect(bodyOf(query).data).toEqual({ columns: ["wafer_id"], rows: [["w-001"], ["w-002"]], rowCount: 2 });
+  });
+
+  it("refuses deleting a draft entity that carries an approved binding (409)", async () => {
+    const created = await postJson(["entities"], {
+      name: "BoundDraft",
+      attributes: [{ name: "wafer_id", type: "string" }]
+    });
+    const attr = (bodyOf(created).data as { attributes: Array<{ id: string }> }).attributes[0];
+    await putJson(["bindings", "BoundDraft"], {
+      table: "v_anom_wafer",
+      idColumn: "id",
+      fieldMappings: [{ attribute_id: attr?.id, source_column: "wafer_id" }]
+    });
+    await call("POST", ["bindings", "BoundDraft", "approve"], bodyRequest({}));
+
+    const deleted = await delJson(["entities", "BoundDraft"]);
+    expect(deleted.status).toBe(409);
+    expect(bodyOf(deleted).error?.message).toContain("已审批绑定");
+  });
+
+  it("guards Record-form mapping references by attribute name (not just array-form ids)", async () => {
+    // bind-tool 的 field_mappings_json 是历史 Record 形态（键=属性名）：删其中任一属性都必须被拦
+    const blocked = await putJson(["entities", "ToolEvent"], {
+      attributes: [{ name: "chamber_id" }]
+    });
+    expect(blocked.status).toBe(400);
+    expect(bodyOf(blocked).error?.message).toContain("event_name");
+
+    // Record 形态的审批覆盖率按 键数 计、物理校验按 值(列名) 做——draft 化后重审批应通过
+    metadata.db.prepare("UPDATE ont_bindings SET status = 'draft' WHERE id = 'bind-tool'").run();
+    const approve = await call("POST", ["bindings", "ToolEvent", "approve"], bodyRequest({}));
+    expect(approve.status).toBe(200);
+    expect((bodyOf(approve).data as { status: string }).status).toBe("approved");
+  });
+
+  it("decodes URL-encoded entity names in path segments (Chinese roundtrip)", async () => {
+    await postJson(["entities"], { name: "腔体", nameCn: "腔体", attributes: [{ name: "code" }] });
+
+    // config-api 按 pathname.split("/") 切段不解码；浏览器侧 encodeURIComponent 后到这里是 %XX
+    const deleted = await delJson(["entities", encodeURIComponent("腔体")]);
+    expect(deleted.status).toBe(200);
+
+    const entities = await call("GET", ["entities"], bodyRequest(""));
+    const names = (bodyOf(entities).data as { entities: Array<{ name: string }> }).entities.map((e) => e.name);
+    expect(names).not.toContain("腔体");
+
+    const malformed = await delJson(["entities", "%zz"]);
+    expect(malformed.status).toBe(400);
   });
 });
 

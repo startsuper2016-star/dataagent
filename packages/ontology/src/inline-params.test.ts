@@ -72,10 +72,32 @@ describe("bindParams (P3-3 native binding)", () => {
     expect(bound.values).toEqual([null, 1, 0]);
   });
 
-  it("keeps unregistered keys in the SQL (prepare-time fail-closed)", () => {
-    const bound = bindParams("SELECT :p0, :x9", { p0: 1 });
-    expect(bound.sql).toBe("SELECT ?, :x9");
-    expect(bound.values).toEqual([1]);
+  it("throws on unregistered keys with the key name (fail-closed moved ahead of bind)", () => {
+    // SQLite 对未知命名参数 prepare 不报错、bind/step 才抛 out-of-range 且不含键名——
+    // 扫描期直接拒绝，报错带上键名
+    expect(() => bindParams("SELECT :p0, :x9", { p0: 1 })).toThrow(/:x9/);
+  });
+
+  it("copies line comments and block comments verbatim (:pN inside stays untouched)", () => {
+    const line = bindParams("SELECT a FROM t WHERE a = :p0 -- note :p1 here", { p0: "x", p1: "y" });
+    expect(line).toEqual({ sql: "SELECT a FROM t WHERE a = ? -- note :p1 here", values: ["x"] });
+
+    const block = bindParams("SELECT /* :p0 */ a FROM t WHERE a = :p0", { p0: 1 });
+    expect(block).toEqual({ sql: "SELECT /* :p0 */ a FROM t WHERE a = ?", values: [1] });
+  });
+
+  it("treats double-quoted identifiers as opaque spans", () => {
+    const bound = bindParams('SELECT "col:p1" FROM t WHERE a = :p1', { p1: 1 });
+    expect(bound).toEqual({ sql: 'SELECT "col:p1" FROM t WHERE a = ?', values: [1] });
+  });
+
+  it("executes comment-bearing SQL end-to-end (comment placeholders do not consume values)", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("CREATE TABLE t(a TEXT)");
+    db.exec("INSERT INTO t VALUES ('x'), ('y')");
+    const bound = bindParams("SELECT a FROM t WHERE a = :p0 -- trailing :p1 note", { p0: "x", p1: "y" });
+    const rows = db.prepare(bound.sql).all(...(bound.values as never[])) as Array<{ a: string }>;
+    expect(rows).toEqual([{ a: "x" }]);
   });
 
   it("rejects keys outside the ^p\d+(_\d+)?$ contract", () => {

@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { ontologyFetch } from "../../lib/ontology-client";
+
 type Binding = {
   entity: string;
   table: string;
@@ -59,22 +61,25 @@ export default function OntologyPage() {
       setPromoteResult("❌ 不是合法 JSON");
       return;
     }
-    const res = await fetch("/api/v1/ontology/promote", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify(body)
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setPromoteResult(`❌ ${json.error?.message ?? `HTTP ${res.status}`}`);
-      return;
+    try {
+      const res = await ontologyFetch("/api/v1/ontology/promote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setPromoteResult(`❌ ${json.error?.message ?? `HTTP ${res.status}`}`);
+        return;
+      }
+      setPromoteResult(
+        `✅ 已晋升为 draft：${(json.data.entities as Array<{ entity: string; reused: boolean; bindingCreated: boolean }>)
+          .map((e) => `${e.entity}${e.reused ? "（复用）" : ""}${e.bindingCreated ? "（新建绑定）" : ""}`)
+          .join("、")} — 到绑定列表逐个审批`
+      );
+    } catch (error) {
+      setPromoteResult(`❌ ${String(error)}`);
     }
-    setPromoteResult(
-      `✅ 已晋升为 draft：${(json.data.entities as Array<{ entity: string; reused: boolean; bindingCreated: boolean }>)
-        .map((e) => `${e.entity}${e.reused ? "（复用）" : ""}${e.bindingCreated ? "（新建绑定）" : ""}`)
-        .join("、")} — 到绑定列表逐个审批`
-    );
   };
 
   if (loading)

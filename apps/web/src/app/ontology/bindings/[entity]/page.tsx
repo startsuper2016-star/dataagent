@@ -3,6 +3,8 @@
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { ontologyFetch } from "../../../../lib/ontology-client";
+
 type Attribute = {
   id: string;
   name: string;
@@ -109,10 +111,9 @@ export default function BindingEditorPage() {
         .filter((a) => mappings[a.id])
         .map((a) => ({ attribute_id: a.id, source_column: mappings[a.id] }))
     };
-    const res = await fetch(`/api/v1/ontology/bindings/${encodeURIComponent(entityName)}`, {
+    const res = await ontologyFetch(`/api/v1/ontology/bindings/${encodeURIComponent(entityName)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
       body: JSON.stringify(body)
     });
     const json = await res.json();
@@ -126,9 +127,9 @@ export default function BindingEditorPage() {
 
   const approve = async () => {
     setMessage(null);
-    const res = await fetch(
+    const res = await ontologyFetch(
       `/api/v1/ontology/bindings/${encodeURIComponent(entityName)}/approve`,
-      { method: "POST", credentials: "same-origin" }
+      { method: "POST" }
     );
     const json = await res.json();
     if (!res.ok) {
