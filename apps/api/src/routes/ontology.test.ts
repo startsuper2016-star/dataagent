@@ -63,6 +63,11 @@ const postJson = (subPath: string[], body: unknown): Promise<ConfigApiResponse> 
 const putJson = (subPath: string[], body: unknown): Promise<ConfigApiResponse> =>
   call("PUT", subPath, bodyRequest(body));
 
+const delJson = (subPath: string[]): Promise<ConfigApiResponse> =>
+  call("DELETE", subPath, bodyRequest({}));
+
+const patchJson = (subPath: string[], body: unknown): Promise<ConfigApiResponse> =>
+  call("PATCH", subPath, bodyRequest(body));
 const bodyOf = (response: ConfigApiResponse): ApiBody => response.body as ApiBody;
 
 const createSpcFixture = (path: string): void => {
@@ -271,8 +276,8 @@ describe("P1-C governance — GET /entities and /datasource/tables", () => {
     expect(wafer?.binding?.status).toBe("approved");
   });
 
-  it("rejects non-GET methods with 405", async () => {
-    const response = await postJson(["entities"], {});
+  it("rejects unsupported methods on the entities collection with 405", async () => {
+    const response = await patchJson(["entities"], {});
     expect(response.status).toBe(405);
   });
 
@@ -477,6 +482,216 @@ describe("P3-2 governance — POST /promote (DataLink candidates)", () => {
 
   it("rejects non-POST methods with 405", async () => {
     const response = await call("GET", ["promote"], bodyRequest(""));
+    expect(response.status).toBe(405);
+  });
+});
+
+describe("P3-4 designer — entity modeling", () => {
+  it("creates a draft entity with attributes; rejects duplicates, unsafe names and missing name", async () => {
+    const created = await postJson(["entities"], {
+      name: "Chamber",
+      nameCn: "腔体",
+      description: "设计器新建",
+      attributes: [
+        { name: "chamber_id", displayName: "腔体编号", type: "string", required: true },
+        { name: "capacity", type: "number" }
+      ]
+    });
+    expect(created.status).toBe(200);
+    const data = bodyOf(created).data as {
+      name: string;
+      status: string;
+      attributes: Array<{ name: string; display_name: string | null; required: number }>;
+    };
+    expect(data.status).toBe("draft");
+    expect(data.attributes.map((a) => a.name)).toEqual(["chamber_id", "capacity"]);
+    expect(data.attributes[0]).toMatchObject({ display_name: "腔体编号", required: 1 });
+
+    const duplicate = await postJson(["entities"], { name: "Chamber" });
+    expect(duplicate.status).toBe(409);
+    expect(bodyOf(duplicate).error?.code).toBe("CONFLICT");
+
+    // 实体名进入 rewriteObjectNames 的正则与 SQL 引号拼接：元字符必须在门口拒绝
+    const unsafe = await postJson(["entities"], { name: "Bad(Name" });
+    expect(unsafe.status).toBe(400);
+
+    const missing = await postJson(["entities"], { nameCn: "无名" });
+    expect(missing.status).toBe(400);
+  });
+
+  it("syncs attributes on PUT: keeps ids for surviving attributes, refuses deleting referenced ones", async () => {
+    const created = await postJson(["entities"], {
+      name: "Editable",
+      attributes: [
+        { name: "alpha", type: "string" },
+        { name: "beta", type: "string" }
+      ]
+    });
+    const before = bodyOf(created).data as { attributes: Array<{ id: string; name: string }> };
+    const alphaId = before.attributes.find((a) => a.name === "alpha")?.id;
+
+    // 删 beta、改 alpha（display/type）、加 gamma —— alpha 的 id 必须保持（绑定映射按 id 引用）
+    const updated = await putJson(["entities", "Editable"], {
+      nameCn: "可编辑",
+      attributes: [
+        { name: "alpha", displayName: "甲", type: "number" },
+        { name: "gamma", type: "boolean", required: true }
+      ]
+    });
+    expect(updated.status).toBe(200);
+    const after = bodyOf(updated).data as {
+      name_cn: string | null;
+      attributes: Array<{ id: string; name: string; display_name: string | null; type: string; required: number }>;
+    };
+    expect(after.name_cn).toBe("可编辑");
+    expect(after.attributes.map((a) => a.name)).toEqual(["alpha", "gamma"]);
+    expect(after.attributes[0]?.id).toBe(alphaId);
+    expect(after.attributes[0]).toMatchObject({ display_name: "甲", type: "number" });
+    expect(after.attributes[1]?.required).toBe(1);
+
+    // 被 approved 绑定映射引用的属性不可删（AnomWafer: wafer_id/chamber_id/lot 全部在映射里）
+    const blocked = await putJson(["entities", "AnomWafer"], {
+      attributes: [{ name: "chamber_id" }, { name: "lot" }]
+    });
+    expect(blocked.status).toBe(400);
+    expect(bodyOf(blocked).error?.message).toContain("wafer_id");
+
+    const renamed = await putJson(["entities", "Editable"], { name: "Renamed" });
+    expect(renamed.status).toBe(400);
+
+    const unknown = await putJson(["entities", "NoSuchEntity"], {});
+    expect(unknown.status).toBe(400);
+
+    const malformed = await putJson(["entities", "Editable"], { attributes: "not-an-array" });
+    expect(malformed.status).toBe(400);
+  });
+
+  it("deletes a draft entity with relation cascade; refuses published and version-registered ones", async () => {
+    const created = await postJson(["entities"], { name: "Doomed", attributes: [{ name: "code" }] });
+    const doomedId = (bodyOf(created).data as { id: string }).id;
+
+    // 版本登记中的 draft 实体不可删
+    const version = await postJson(["versions"], { name: "v-doomed", entityIds: [doomedId] });
+    expect(version.status).toBe(200);
+    const blockedByVersion = await delJson(["entities", "Doomed"]);
+    expect(blockedByVersion.status).toBe(409);
+
+    // 干净 draft 实体：删除 + 关系级联
+    await postJson(["entities"], { name: "Doomed2", attributes: [{ name: "code" }] });
+    const rel = await postJson(["relations"], {
+      name: "doomed2_has",
+      fromEntity: "Doomed2",
+      toEntity: "AnomWafer",
+      sourceField: "code",
+      targetField: "lot"
+    });
+    const relId = (bodyOf(rel).data as { id: string }).id;
+    const deleted = await delJson(["entities", "Doomed2"]);
+    expect(deleted.status).toBe(200);
+    const entities = await call("GET", ["entities"], bodyRequest(""));
+    const names = (bodyOf(entities).data as { entities: Array<{ name: string }> }).entities.map((e) => e.name);
+    expect(names).not.toContain("Doomed2");
+    const relGone = await delJson(["relations", relId]);
+    expect(relGone.status).toBe(404);
+
+    const published = await delJson(["entities", "AnomWafer"]);
+    expect(published.status).toBe(409);
+
+    const unknown = await delJson(["entities", "NoSuchEntity"]);
+    expect(unknown.status).toBe(400);
+  });
+
+  it("carries a designer-created entity through binding creation and approval", async () => {
+    const created = await postJson(["entities"], {
+      name: "FreshEntity",
+      nameCn: "新实体",
+      attributes: [{ name: "wafer_id", type: "string" }]
+    });
+    expect(created.status).toBe(200);
+    const attr = (bodyOf(created).data as { attributes: Array<{ id: string; name: string }> }).attributes[0];
+    expect(attr?.name).toBe("wafer_id");
+
+    // 无绑定 → 查询 404
+    const before = await postJson(["query"], { entity: "FreshEntity" });
+    expect(before.status).toBe(404);
+
+    // 绑定编辑器首次保存：绑定行不存在则创建（datasource 解析 SPC_MVP_SQLITE）
+    const bind = await putJson(["bindings", "FreshEntity"], {
+      table: "v_anom_wafer",
+      idColumn: "id",
+      fieldMappings: [{ attribute_id: attr?.id, source_column: "wafer_id" }]
+    });
+    expect(bind.status).toBe(200);
+    expect((bodyOf(bind).data as { status: string }).status).toBe("draft");
+
+    const approve = await call("POST", ["bindings", "FreshEntity", "approve"], bodyRequest({}));
+    expect(approve.status).toBe(200);
+
+    const query = await postJson(["query"], { entity: "FreshEntity" });
+    expect(query.status).toBe(200);
+    expect(bodyOf(query).data).toEqual({ columns: ["wafer_id"], rows: [["w-001"], ["w-002"]], rowCount: 2 });
+  });
+});
+
+describe("P3-4 designer — relations", () => {
+  it("creates and deletes relations with entity/field/cardinality validation", async () => {
+    const created = await postJson(["relations"], {
+      name: "wafer_same_chamber_events",
+      fromEntity: "AnomWafer",
+      toEntity: "ToolEvent",
+      cardinality: "N:1",
+      sourceField: "chamber_id",
+      targetField: "chamber_id",
+      description: "同腔体事件"
+    });
+    expect(created.status).toBe(200);
+    const data = bodyOf(created).data as {
+      id: string;
+      from_entity: string;
+      to_entity: string;
+      cardinality: string;
+    };
+    expect(data).toMatchObject({ from_entity: "AnomWafer", to_entity: "ToolEvent", cardinality: "N:1" });
+
+    const duplicate = await postJson(["relations"], {
+      name: "wafer_same_chamber_events",
+      fromEntity: "AnomWafer",
+      toEntity: "ToolEvent"
+    });
+    expect(duplicate.status).toBe(409);
+
+    const badTarget = await postJson(["relations"], { name: "x", fromEntity: "AnomWafer", toEntity: "NoSuch" });
+    expect(badTarget.status).toBe(400);
+
+    // 关系字段会拼进 traverse 的 JOIN，元字符拒绝
+    const badField = await postJson(["relations"], {
+      name: "x2",
+      fromEntity: "AnomWafer",
+      toEntity: "ToolEvent",
+      sourceField: "a b"
+    });
+    expect(badField.status).toBe(400);
+
+    const badCardinality = await postJson(["relations"], {
+      name: "x3",
+      fromEntity: "AnomWafer",
+      toEntity: "ToolEvent",
+      cardinality: "many"
+    });
+    expect(badCardinality.status).toBe(400);
+
+    const context = await call("GET", ["context"], bodyRequest(""));
+    const relations = (bodyOf(context).data as { relations: Array<{ name: string }> }).relations;
+    expect(relations.find((r) => r.name === "wafer_same_chamber_events")).toBeTruthy();
+
+    const deleted = await delJson(["relations", data.id]);
+    expect(deleted.status).toBe(200);
+    const deletedAgain = await delJson(["relations", data.id]);
+    expect(deletedAgain.status).toBe(404);
+  });
+
+  it("rejects non-POST methods on the relations collection with 405", async () => {
+    const response = await call("GET", ["relations"], bodyRequest(""));
     expect(response.status).toBe(405);
   });
 });

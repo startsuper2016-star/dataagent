@@ -108,6 +108,12 @@ export default function OntologyPage() {
         </div>
         <div className="flex gap-3">
           <a
+            href="/ontology/designer"
+            className="rounded-md bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            设计器
+          </a>
+          <a
             href="/ontology/versions"
             className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >

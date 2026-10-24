@@ -39,8 +39,13 @@ import type { ConfigApiContext, ConfigApiResponse } from "./types.js";
  *
  * 治理写路径（P1-C 编辑流；ont_* 元数据写，数据源连接仍只读）：
  * - GET  /api/v1/ontology/entities                → {entities: [{id,name,status,attributes:[...],binding:{...}|null}]}
+ * - POST /api/v1/ontology/entities                {name, nameCn?, description?, attributes?} → 建 draft 实体
+ * - PUT  /api/v1/ontology/entities/:name          {nameCn?, description?, attributes?} → 属性按名同步（保留 id）
+ * - DELETE /api/v1/ontology/entities/:name        → 仅 draft 且未被版本/绑定引用的实体可删（关系级联删）
+ * - POST /api/v1/ontology/relations               {fromEntity, toEntity, name, cardinality?, sourceField?, targetField?}
+ * - DELETE /api/v1/ontology/relations/:id         → 删除关系边
  * - GET  /api/v1/ontology/datasource/tables       → {tables: [{name, columns: [{name,type}], sample?}]}
- * - PUT  /api/v1/ontology/bindings/:entity        {table, idColumn, fieldMappings, filterExpr?} → 编辑即打回 draft
+ * - PUT  /api/v1/ontology/bindings/:entity        {table, idColumn, fieldMappings, filterExpr?} → 编辑即打回 draft（绑定缺失则创建——设计器新建实体的接续步）
  * - POST /api/v1/ontology/bindings/:entity/approve → 校验（物理表/列存在 + id_column + 覆盖率≥50%）→ approved
  * - GET|POST /api/v1/ontology/versions            → 版本清单 / 创建 draft（{name, description?, entityIds}）
  * - GET  /api/v1/ontology/versions/:id            → 版本详情（含实体清单与一致性检查）
@@ -105,7 +110,9 @@ export const handleOntologyRequest = async (
       case "context":
         return handleContext(method, db);
       case "entities":
-        return handleEntities(method, db);
+        return await handleEntitiesRoute(request, method, subPath.slice(1), context);
+      case "relations":
+        return await handleRelationsRoute(request, method, subPath.slice(1), context);
       case "datasource":
         return await handleDatasourceTables(method, subPath.slice(1), context);
       case "versions":
@@ -219,7 +226,7 @@ const handleBindingsRoute = async (
   throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知绑定端点: ${rest.join("/")}`);
 };
 
-/** PUT /bindings/:entity —— 覆盖表/ID列/字段映射；编辑即打回 draft（重走审批）。 */
+/** PUT /bindings/:entity —— 覆盖表/ID列/字段映射；编辑即打回 draft（重走审批）。绑定行缺失则先创建（设计器新建的实体直接进绑定编辑器）。 */
 const handleBindingUpdate = async (
   request: IncomingMessage,
   entityName: string,
@@ -236,16 +243,28 @@ const handleBindingUpdate = async (
   }
   const conn = openSpcConnection(context.metadataStore, context.userId);
   assertTableAndColumns(conn, table, idColumn, mappings);
-  const bindingId = requireBindingId(db, entityId);
+  const mappingsJson = JSON.stringify(
+    mappings.map((m) => ({ attribute_id: String(m.attribute_id ?? ""), source_column: String(m.source_column ?? "") }))
+  );
+  const existing = db.prepare("SELECT id FROM ont_bindings WHERE entity_id = ?").get(entityId) as
+    | { id: string }
+    | undefined;
+  if (!existing) {
+    const datasourceId = resolvePromotionDatasourceId(context, stringValue(body.datasourceId));
+    const bindingId = randomUUID();
+    db.prepare(
+      "INSERT INTO ont_bindings (id, entity_id, datasource_id, table_name, id_column, field_mappings_json, status) VALUES (?, ?, ?, ?, ?, ?, 'draft')"
+    ).run(bindingId, entityId, datasourceId, table, idColumn, mappingsJson);
+    return ok(bindingRow(db, bindingId, entityName));
+  }
+  const bindingId = existing.id;
   db.prepare(
     `UPDATE ont_bindings SET table_name = ?, id_column = ?, field_mappings_json = ?,
             filter_expr = COALESCE(?, filter_expr), status = 'draft' WHERE id = ?`
   ).run(
     table,
     idColumn,
-    JSON.stringify(
-      mappings.map((m) => ({ attribute_id: String(m.attribute_id ?? ""), source_column: String(m.source_column ?? "") }))
-    ),
+    mappingsJson,
     stringValue(body.filterExpr) ?? null,
     bindingId
   );
@@ -289,8 +308,35 @@ const handleBindingApprove = (
 };
 
 /** GET /entities —— 治理视图：实体 + 属性 + 当前绑定（含 draft）。 */
-const handleEntities = (method: string | undefined, db: DatabaseSync): ConfigApiResponse => {
-  requireMethod(method, "GET");
+const handleEntitiesRoute = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  if (rest.length === 0) {
+    if (method === "GET") {
+      return ok({ entities: listEntityDetails(db) });
+    }
+    requireMethod(method, "POST");
+    return handleEntityCreate(request, db);
+  }
+  const entityName = rest[0];
+  if (!entityName) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少实体名");
+  }
+  if (rest.length === 1 && method === "PUT") {
+    return handleEntityUpdate(request, entityName, db);
+  }
+  if (rest.length === 1 && method === "DELETE") {
+    return handleEntityDelete(entityName, db);
+  }
+  throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（实体端点支持 GET/POST/PUT/DELETE）: ${method ?? ""}`);
+};
+
+/** GET /entities 的行构造器：实体 + 属性 + 最新绑定（POST/PUT 返回同构，UI 免二次拉取）。 */
+const listEntityDetails = (db: DatabaseSync): unknown[] => {
   const entities = db
     .prepare("SELECT id, name, name_cn, status, tier FROM ont_entities ORDER BY name")
     .all() as { id: string; name: string; name_cn: string | null; status: string; tier: number }[];
@@ -300,13 +346,282 @@ const handleEntities = (method: string | undefined, db: DatabaseSync): ConfigApi
   const bindingStmt = db.prepare(
     "SELECT id, table_name, id_column, field_mappings_json, filter_expr, status FROM ont_bindings WHERE entity_id = ? ORDER BY rowid DESC LIMIT 1"
   );
-  return ok({
-    entities: entities.map((e) => ({
-      ...e,
-      attributes: attrStmt.all(e.id),
-      binding: (bindingStmt.get(e.id) as Record<string, unknown> | undefined) ?? null
-    }))
+  return entities.map((e) => ({
+    ...e,
+    attributes: attrStmt.all(e.id),
+    binding: (bindingStmt.get(e.id) as Record<string, unknown> | undefined) ?? null
+  }));
+};
+
+/** 实体详情按 id 取（与 listEntityDetails 行同构；未知 id 抛 500 级内部错——调用方刚插入/更新过）。 */
+const entityDetailById = (db: DatabaseSync, entityId: string): unknown => {
+  const found = (listEntityDetails(db) as Array<{ id: string }>).find((e) => e.id === entityId);
+  if (!found) {
+    throw new OntologyHttpError(500, "INTERNAL_ERROR", `实体详情读取失败: ${entityId}`);
+  }
+  return found;
+};
+
+/** 入参属性清单的静态校验：name 必填且过标识符白名单（实体名/属性名会进 rewriteObjectNames 正则与 SQL 引号拼接）。 */
+const validatedAttributeInputs = (
+  raw: Record<string, unknown>[] | undefined
+): { name: string; displayName?: string | undefined; type: string; required: boolean }[] => {
+  if (!raw) {
+    return [];
+  }
+  const seen = new Set<string>();
+  return raw.map((attr, index) => {
+    const name = stringValue(attr.name);
+    if (!name || !isSafeIdentifier(name)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `第 ${index + 1} 个属性缺少 name 或含非法字符: ${name ?? ""}`);
+    }
+    if (seen.has(name)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `属性名重复: ${name}`);
+    }
+    seen.add(name);
+    const type = stringValue(attr.type) ?? "string";
+    return { name, displayName: stringValue(attr.displayName), type, required: attr.required === true };
   });
+};
+
+/** POST /entities —— 设计器建实体：draft 落库（属性 sort=入参序），重名 409。 */
+const handleEntityCreate = async (
+  request: IncomingMessage,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const body = await readJsonBody(request);
+  const name = stringValue(body.name);
+  if (!name) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 name");
+  }
+  if (!isSafeIdentifier(name)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `实体名含非法字符（仅字母/数字/下划线/中文）: ${name}`);
+  }
+  const attributes = validatedAttributeInputs(arrayValue(body.attributes));
+  const ontologyId = requireOntologyId(db);
+  if (db.prepare("SELECT 1 FROM ont_entities WHERE name = ?").get(name)) {
+    throw new OntologyHttpError(409, "CONFLICT", `实体已存在: ${name}`);
+  }
+  const entityId = randomUUID();
+  const insertEntity = db.prepare(
+    "INSERT INTO ont_entities (id, ontology_id, name, name_cn, tier, status, description) VALUES (?, ?, ?, ?, 2, 'draft', ?)"
+  );
+  const insertAttribute = db.prepare(
+    "INSERT INTO ont_attributes (id, entity_id, name, display_name, type, required, sort) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertEntity.run(entityId, ontologyId, name, stringValue(body.nameCn) ?? null, stringValue(body.description) ?? null);
+    attributes.forEach((attr, sort) => {
+      insertAttribute.run(randomUUID(), entityId, attr.name, attr.displayName ?? null, attr.type, attr.required ? 1 : 0, sort);
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ok(entityDetailById(db, entityId));
+};
+
+/**
+ * PUT /entities/:name —— 编辑实体元数据 + 属性按名同步。
+ * 同步规则：按 name 对齐——已有 → 保 id 更新 display/type/required/sort（绑定映射引用 attribute_id，保 id 即不断链）；
+ * 新增 → 插入；入参缺失 → 删除，但被任一绑定映射引用（数组形态按 id、Record 形态按属性名）的属性拒绝删除。
+ * 实体名不可改（它是绑定路由/查询/SQL 重写的全局键）。
+ */
+const handleEntityUpdate = async (
+  request: IncomingMessage,
+  entityName: string,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const entityId = requireEntityId(db, entityName);
+  const body = await readJsonBody(request);
+  const renamed = stringValue(body.name);
+  if (renamed && renamed !== entityName) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "实体名不可修改（绑定/查询/SQL 重写均以其为键）");
+  }
+  const rawAttributes = "attributes" in body ? arrayValue(body.attributes) : undefined;
+  if ("attributes" in body && !rawAttributes) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "attributes 必须是对象数组");
+  }
+  const attributes = rawAttributes ? validatedAttributeInputs(rawAttributes) : null;
+  const updateEntity = db.prepare("UPDATE ont_entities SET name_cn = COALESCE(?, name_cn), description = COALESCE(?, description) WHERE id = ?");
+  const updateAttribute = db.prepare(
+    "UPDATE ont_attributes SET display_name = ?, type = ?, required = ?, sort = ? WHERE id = ?"
+  );
+  const insertAttribute = db.prepare(
+    "INSERT INTO ont_attributes (id, entity_id, name, display_name, type, required, sort) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  );
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    updateEntity.run(stringValue(body.nameCn) ?? null, stringValue(body.description) ?? null, entityId);
+    if (attributes) {
+      const existing = db
+        .prepare("SELECT id, name FROM ont_attributes WHERE entity_id = ?")
+        .all(entityId) as { id: string; name: string }[];
+      const byName = new Map(existing.map((a) => [a.name, a.id]));
+      const keepNames = new Set(attributes.map((a) => a.name));
+      const deletable = existing.filter((a) => !keepNames.has(a.name));
+      if (deletable.length > 0) {
+        const referenced = referencedAttributeKeys(db, entityId);
+        const blocked = deletable.filter(
+          (a) => referenced.ids.has(a.id) || referenced.names.has(a.name)
+        );
+        if (blocked.length > 0) {
+          throw new OntologyHttpError(
+            400,
+            "BAD_REQUEST",
+            `属性被绑定映射引用，不可删除（先改绑定）: ${blocked.map((a) => a.name).join("、")}`
+          );
+        }
+        const deleteAttribute = db.prepare("DELETE FROM ont_attributes WHERE id = ?");
+        for (const attr of deletable) {
+          deleteAttribute.run(attr.id);
+        }
+      }
+      attributes.forEach((attr, sort) => {
+        const keptId = byName.get(attr.name);
+        if (keptId) {
+          updateAttribute.run(attr.displayName ?? null, attr.type, attr.required ? 1 : 0, sort, keptId);
+        } else {
+          insertAttribute.run(randomUUID(), entityId, attr.name, attr.displayName ?? null, attr.type, attr.required ? 1 : 0, sort);
+        }
+      });
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ok(entityDetailById(db, entityId));
+};
+
+/** 实体全部绑定映射引用的属性键（ids = 数组形态 attribute_id；names = Record 形态键=属性名）。 */
+const referencedAttributeKeys = (
+  db: DatabaseSync,
+  entityId: string
+): { ids: Set<string>; names: Set<string> } => {
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  const rows = db
+    .prepare("SELECT field_mappings_json FROM ont_bindings WHERE entity_id = ?")
+    .all(entityId) as { field_mappings_json: string }[];
+  for (const row of rows) {
+    const parsed = safeJsonParse(row.field_mappings_json);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed as Array<{ attribute_id?: unknown }>) {
+        if (typeof item.attribute_id === "string") {
+          ids.add(item.attribute_id);
+        }
+      }
+    } else if (recordValue(parsed)) {
+      for (const key of Object.keys(parsed as Record<string, unknown>)) {
+        names.add(key);
+      }
+    }
+  }
+  return { ids, names };
+};
+
+/** DELETE /entities/:name —— 仅 draft 且未被版本登记的实体可删；draft 绑定与两端关系级联删。 */
+const handleEntityDelete = (entityName: string, db: DatabaseSync): ConfigApiResponse => {
+  const entity = db
+    .prepare("SELECT id, status FROM ont_entities WHERE name = ?")
+    .get(entityName) as { id: string; status: string } | undefined;
+  if (!entity) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `未知实体: ${entityName}`);
+  }
+  if (entity.status !== "draft") {
+    throw new OntologyHttpError(409, "CONFLICT", `实体状态为 ${entity.status}，仅 draft 实体可删除`);
+  }
+  const inVersion = db.prepare("SELECT 1 FROM ont_version_entities WHERE source_entity_id = ?").get(entity.id);
+  if (inVersion) {
+    throw new OntologyHttpError(409, "CONFLICT", "实体已被版本登记，先移出版本或删除版本");
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM ont_relations WHERE from_entity_id = ? OR to_entity_id = ?").run(entity.id, entity.id);
+    db.prepare("DELETE FROM ont_bindings WHERE entity_id = ?").run(entity.id);
+    db.prepare("DELETE FROM ont_attributes WHERE entity_id = ?").run(entity.id);
+    db.prepare("DELETE FROM ont_entities WHERE id = ?").run(entity.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ok({ deleted: entityName });
+};
+
+/** POST|DELETE /relations —— 设计器关系面：读取走 GET /context（含 from/to 实体名）。 */
+const handleRelationsRoute = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  if (rest.length === 0) {
+    requireMethod(method, "POST");
+    return handleRelationCreate(request, db);
+  }
+  if (rest.length === 1) {
+    requireMethod(method, "DELETE");
+    return handleRelationDelete(rest[0] ?? "", db);
+  }
+  throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知关系端点: ${rest.join("/")}`);
+};
+
+/** POST /relations —— 建关系边：两端实体必须存在，source/target_field 过标识符白名单（traverse 拼进 JOIN）。 */
+const handleRelationCreate = async (
+  request: IncomingMessage,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const body = await readJsonBody(request);
+  const name = stringValue(body.name);
+  const fromEntity = stringValue(body.fromEntity);
+  const toEntity = stringValue(body.toEntity);
+  if (!name || !fromEntity || !toEntity) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 name/fromEntity/toEntity");
+  }
+  const cardinality = stringValue(body.cardinality) ?? "1:N";
+  if (!["1:1", "1:N", "N:1", "N:N"].includes(cardinality)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `cardinality 仅支持 1:1/1:N/N:1/N:N: ${cardinality}`);
+  }
+  const sourceField = stringValue(body.sourceField);
+  const targetField = stringValue(body.targetField);
+  for (const field of [sourceField, targetField]) {
+    if (field && !isSafeIdentifier(field)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `关系字段含非法字符（仅字母/数字/下划线/中文）: ${field}`);
+    }
+  }
+  const from = requireEntityId(db, fromEntity);
+  const to = requireEntityId(db, toEntity);
+  if (db.prepare("SELECT 1 FROM ont_relations WHERE from_entity_id = ? AND to_entity_id = ? AND name = ?").get(from, to, name)) {
+    throw new OntologyHttpError(409, "CONFLICT", `关系已存在: ${fromEntity} -${name}-> ${toEntity}`);
+  }
+  const relationId = randomUUID();
+  db.prepare(
+    "INSERT INTO ont_relations (id, from_entity_id, to_entity_id, name, rel_type, cardinality, source_field, target_field, description) VALUES (?, ?, ?, ?, 'has_many', ?, ?, ?, ?)"
+  ).run(relationId, from, to, name, cardinality, sourceField ?? null, targetField ?? null, stringValue(body.description) ?? null);
+  return ok({
+    id: relationId,
+    name,
+    from_entity: fromEntity,
+    to_entity: toEntity,
+    cardinality,
+    source_field: sourceField ?? null,
+    target_field: targetField ?? null,
+    description: stringValue(body.description) ?? null
+  });
+};
+
+/** DELETE /relations/:id —— 未知 id → 404。 */
+const handleRelationDelete = (relationId: string, db: DatabaseSync): ConfigApiResponse => {
+  const result = db.prepare("DELETE FROM ont_relations WHERE id = ?").run(relationId);
+  if (result.changes === 0) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知关系: ${relationId}`);
+  }
+  return ok({ deleted: relationId });
 };
 
 /** GET /datasource/tables —— SPC 数据源物理表/视图 + 列 + 首行样例（映射编辑器左栏）。 */
@@ -817,7 +1132,7 @@ const handleContext = (method: string | undefined, db: DatabaseSync): ConfigApiR
     .all();
   const relations = db
     .prepare(
-      `SELECT r.name AS name, ef.name AS from_entity, et.name AS to_entity,
+      `SELECT r.id AS id, r.name AS name, ef.name AS from_entity, et.name AS to_entity,
               r.cardinality AS cardinality, r.source_field AS source_field,
               r.target_field AS target_field
        FROM ont_relations r
@@ -931,7 +1246,7 @@ const traversableEdges = (db: DatabaseSync): RelationEdge[] => {
 
 const requireMethod = (
   method: string | undefined,
-  expected: "GET" | "POST" | "PUT"
+  expected: "GET" | "POST" | "PUT" | "DELETE"
 ): void => {
   if (method !== expected) {
     throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（需要 ${expected}）。`);
