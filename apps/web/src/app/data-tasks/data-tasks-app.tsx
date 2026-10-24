@@ -997,7 +997,7 @@ function DataTasksCopilotShell() {
           event instanceof Error
             ? event.message
             : String((event as { error?: unknown }).error ?? event);
-        if (message.includes("运行结束但未发出终止事件")) {
+        if (message.includes("Run ended without emitting a terminal event")) {
           return;
         }
         if (
@@ -1354,7 +1354,7 @@ function DataTaskWorkspace({
       })
       .catch((error) => {
         if (!cancelled) {
-          setSessionSyncError(error instanceof Error ? error.message : "加载服务器会话失败");
+          setSessionSyncError(error instanceof Error ? error.message : "Failed to load server sessions");
         }
       });
     return () => {
@@ -1389,7 +1389,7 @@ function DataTaskWorkspace({
         return await updateItem(kind, item);
       } catch (error) {
         setConfigActionError(
-          error instanceof Error ? error.message : "保存配置失败",
+          error instanceof Error ? error.message : "Failed to save configuration",
         );
         throw error;
       }
@@ -1426,7 +1426,7 @@ function DataTaskWorkspace({
         return createdId;
       } catch (error) {
         setConfigActionError(
-          error instanceof Error ? error.message : "创建配置失败",
+          error instanceof Error ? error.message : "Failed to create configuration",
         );
         throw error;
       }
@@ -1577,7 +1577,7 @@ function DataTaskWorkspace({
     try {
       await configApi.cancelRun(liveRun.runId, "user-requested");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "取消运行失败";
+      const message = error instanceof Error ? error.message : "Failed to cancel run";
       setConfigActionError(message);
       throw error instanceof Error ? error : new Error(message);
     } finally {
@@ -1649,7 +1649,7 @@ function DataTaskWorkspace({
         setSessionSyncError(null);
       })
       .catch((error) => {
-        setSessionSyncError(error instanceof Error ? error.message : "同步会话重命名失败");
+        setSessionSyncError(error instanceof Error ? error.message : "Failed to sync session rename");
       });
   }, []);
 
@@ -1754,7 +1754,7 @@ function DataTaskWorkspace({
             setActiveSessionId(previousActiveSessionId);
           }
           setSessionSyncError(
-            error instanceof Error ? error.message : "删除服务器会话失败",
+            error instanceof Error ? error.message : "Failed to delete session on server",
           );
         });
     },
@@ -2708,7 +2708,7 @@ function ToolPendingHint({ displayStatus }: { displayStatus: ToolDisplayStatus }
 function ToolResultMissingCard({ name }: { name: string }) {
   return (
     <div className="rounded-xl border border-dashed border-border bg-surface-subtle p-3 text-xs leading-5 text-muted">
-      <div className="font-semibold text-foreground">执行结果未同步</div>
+      <div className="font-semibold text-foreground">Execution result not synced</div>
       <p className="mt-1">
         <span className="font-mono">{name}</span>{" "}
          tool observation has not reached the frontend thread. If the right-side Trace already has SQL audit or step
@@ -2842,7 +2842,7 @@ function SchemaToolCard({
               ))}
             </div>
           ) : (
-            <ToolPayloadBlock title="原始结果" value={effectiveResult} tone="light" />
+            <ToolPayloadBlock title="Raw result" value={effectiveResult} tone="light" />
           )}
         </ToolResultCard>
       ) : displayStatus === "failed" || resultIsError ? (
@@ -3164,7 +3164,7 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
         }
         const idle = await waitForAgentIdle(agent);
         if (!idle) {
-          throw new Error("重写前无法停止当前运行。");
+          throw new Error("Could not stop the current run before rewriting.");
         }
         const currentMessages = agent.messages ?? [];
         const index = currentMessages.findIndex((message) => message.id === props.message.id);
@@ -3252,8 +3252,8 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
               <button
                 type="button"
                 className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                title="上一个分支"
-                aria-label="上一个分支"
+                title="Previous branch"
+                aria-label="Previous branch"
                 onClick={() => {
                   if (branchState.previousSessionId) {
                     branchActions?.onSwitchBranch(branchState.previousSessionId, {
@@ -3270,8 +3270,8 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
               <button
                 type="button"
                 className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                title="下一个分支"
-                aria-label="下一个分支"
+                title="Next branch"
+                aria-label="Next branch"
                 onClick={() => {
                   if (branchState.nextSessionId) {
                     branchActions?.onSwitchBranch(branchState.nextSessionId, {
@@ -4269,7 +4269,7 @@ function ChatAssistantLoadingRow() {
       className="copilotKitMessage copilotKitAssistantMessage mb-4 flex items-center gap-2.5"
       role="status"
       aria-live="polite"
-      aria-label="Agent 思考中"
+      aria-label="Agent thinking"
     >
       <StepBadge
         stepNumber={0}
@@ -4906,7 +4906,7 @@ function SessionPane({
           >
             <SidebarToggleIcon />
           </button>
-          <div className={previewClassNames.panel} aria-label="工作区侧栏预览">
+          <div className={previewClassNames.panel} aria-label="Workspace sidebar preview">
             <SessionPaneContent
               activeSessionId={activeSessionId}
               activeConfigPanel={activeConfigPanel}
@@ -5099,6 +5099,32 @@ function SessionPaneContent({
               onAction={handleResourceAction}
             />
           ))}
+          {/* Ontology modeling is a standalone governance route (/ontology), not an
+              in-workbench panel — hence an external link card instead of a nav action. */}
+          <a
+            href="/ontology"
+            target="_blank"
+            rel="noreferrer"
+            className="group flex min-h-8 w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors duration-200 hover:bg-surface/80"
+          >
+            <span
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-surface-subtle text-muted-light transition-colors duration-200 group-hover:text-foreground"
+              aria-hidden
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="6" cy="6" r="2.4" />
+                <circle cx="18" cy="8" r="2.4" />
+                <circle cx="10" cy="18" r="2.4" />
+                <path d="M8.2 7 15.7 7.7M7 8.2l2.2 7.5M16.6 10.1l-4.6 5.9" />
+              </svg>
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-snug text-foreground">
+              {t("resources.ontology")}
+            </span>
+            <span className="min-w-12 shrink-0 text-right tabular text-[10px] leading-snug text-muted-light">
+              ↗
+            </span>
+          </a>
         </div>
       </div>
 
@@ -7308,7 +7334,7 @@ function EditableField({
           className={`${className} h-9`}
         >
           <option value="false">No</option>
-          <option value="true">是</option>
+          <option value="true">Yes</option>
         </select>
       ) : inputType === "select" && options ? (
         <select
@@ -7317,7 +7343,7 @@ function EditableField({
           onChange={(event) => onChange(event.target.value)}
           className={`${className} h-9`}
         >
-          <option value="">请选择…</option>
+          <option value="">Select...</option>
           {options.map((option) => {
             const optionPending = isOptionPending?.(option.value) ?? false;
             return (

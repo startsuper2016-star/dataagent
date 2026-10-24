@@ -69,6 +69,7 @@
   "resources": {
     "dataSources": "Data Sources",
     "dataLink": "Data Link",
+    "ontology": "Ontology modeling",
     "knowledge": "Knowledge",
     "agentTools": "Agent Tools",
     "models": "Models",

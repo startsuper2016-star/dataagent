@@ -62,7 +62,7 @@ export function useArtifactExportActions(onExportJob?: (job: JobDto) => void) {
         const job = await artifactExportClient.export(artifact.id, format);
         onExportJob?.(job);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "创建导出任务失败");
+        setError(err instanceof Error ? err.message : "Failed to create export job");
       } finally {
         setBusy(null);
       }

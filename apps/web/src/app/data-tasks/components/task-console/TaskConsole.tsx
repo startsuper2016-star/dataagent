@@ -1476,10 +1476,10 @@ function ToolGroupDetailView({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="步骤耗时" value={groupDuration} />
-        <Metric label="状态" value={toolStatusLabel(group.status, t)} />
-        <Metric label="工具调用" value={`${calls.length} calls`} />
-        <Metric label="输出" value={`${producedArtifacts.length} items`} />
+        <Metric label="Step duration" value={groupDuration} />
+        <Metric label="Status" value={toolStatusLabel(group.status, t)} />
+        <Metric label="Tool calls" value={`${calls.length} calls`} />
+        <Metric label="Outputs" value={`${producedArtifacts.length} items`} />
       </div>
 
       <Panel title={t("console.toolCalls")}>
@@ -1748,9 +1748,9 @@ function ActionDetail({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="步骤耗时" value={stepDurationLabel(toolCall, t)} />
+        <Metric label="Step duration" value={stepDurationLabel(toolCall, t)} />
         <Metric
-          label="状态"
+          label="Status"
           value={detailStatusLabel(toolCall, event.activityStatus, t)}
         />
       </div>
@@ -1891,18 +1891,18 @@ function TokenUsagePanel({
         </div>
       ) : null}
       <div className="grid grid-cols-2 gap-2">
-        <Metric label="输入 Token" value={formatCount(usage.inputTokens)} />
-        <Metric label="输出 Token" value={formatCount(usage.outputTokens)} />
+        <Metric label="Input tokens" value={formatCount(usage.inputTokens)} />
+        <Metric label="Output tokens" value={formatCount(usage.outputTokens)} />
       </div>
       <div className="grid gap-2 rounded-lg border border-border bg-surface-subtle p-3">
         <TokenUsageBar
-          label="输入"
+          label="Input"
           value={usage.inputTokens}
           width={inputShare}
           tone="bg-step-knowledge"
         />
         <TokenUsageBar
-          label="输出"
+          label="Output"
           value={usage.outputTokens}
           width={outputShare}
           tone="bg-primary-light"
@@ -2048,7 +2048,7 @@ function EventPayloadView({
     )?.detail;
     return (
       <div className="grid gap-3">
-        {payload.question && <Metric label="问题" value={payload.question} />}
+        {payload.question && <Metric label="Question" value={payload.question} />}
         {resolvedSql ? (
           <div className={[consoleScrollXShellClass, "min-w-0"].join(" ")}>
             <pre className={[consoleCodeBlockBaseClass, "max-h-80"].join(" ")}>

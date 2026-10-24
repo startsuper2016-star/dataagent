@@ -69,6 +69,7 @@
   "resources": {
     "dataSources": "数据源",
     "dataLink": "Data Link",
+    "ontology": "本体建模",
     "knowledge": "知识库",
     "agentTools": "Agent 工具",
     "models": "模型",

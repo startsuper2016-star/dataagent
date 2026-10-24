@@ -119,10 +119,10 @@ function PasswordIdentityProvider({ children }: { children: ReactNode }) {
   }, [loading, currentUser, value, router]);
 
   if (loading) {
-    return <PasswordAuthShell title="正在加载账号…" />;
+    return <PasswordAuthShell title="Loading account..." />;
   }
   if (!currentUser || !value) {
-    return <PasswordAuthShell title="正在跳转登录…" />;
+    return <PasswordAuthShell title="Redirecting to sign in..." />;
   }
   return (
     <DataTaskIdentityContext.Provider value={value}>

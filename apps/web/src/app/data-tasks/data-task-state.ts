@@ -74,26 +74,26 @@ export function dataStepLabel(kind: DataStepKind, t?: TranslateFn): string {
 }
 
 const toolDisplayTitles: Record<string, string> = {
-  list_data_sources: "查询数据源清单",
+  list_data_sources: "List data sources",
   inspect_schema: "Inspect data source schema",
   preview_table: "Preview table",
   run_sql_readonly: "Run SQL query",
-  retrieve_knowledge: "检索知识库",
-  read_file: "读取文件",
-  edit_file: "编辑文件",
-  write_file: "写入文件",
+  retrieve_knowledge: "Retrieve knowledge",
+  read_file: "Read file",
+  edit_file: "Edit file",
+  write_file: "Write file",
   list_files: "Browse workspace files",
   grep: "Search file contents",
-  mkdir: "创建目录",
-  file_stat: "查看文件信息",
-  execute_command: "执行命令",
-  promote_workspace_file: "提升工作区文件",
+  mkdir: "Create directory",
+  file_stat: "Get file info",
+  execute_command: "Run command",
+  promote_workspace_file: "Promote workspace file",
   task_write: "Write task plan",
-  task_update: "更新任务",
-  task_complete: "完成任务",
+  task_update: "Update task",
+  task_complete: "Complete task",
   task_check: "Check task status",
   ask_user: "Ask user",
-  submit_plan: "提交计划",
+  submit_plan: "Submit plan",
 };
 
 /** Human-readable title for a backend tool name (console / trace / progress). */

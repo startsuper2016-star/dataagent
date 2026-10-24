@@ -657,7 +657,7 @@ function EvidenceChips({
           <button
             type="button"
             aria-label={`Remove ${ref.label}`}
-            title="移除证据"
+            title="Remove evidence"
             onClick={() => onRemove(ref.id)}
             className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded text-primary/70 hover:bg-primary-light/20"
           >
@@ -706,10 +706,10 @@ function ChatAddMenu({ actions }: { actions: ChatAddAction[] }) {
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        aria-label="添加内容"
+        aria-label="Add content"
         aria-haspopup="menu"
         aria-expanded={open}
-        title="添加内容"
+        title="Add content"
         onClick={() => setOpen((value) => !value)}
         className="grid h-7 w-7 cursor-pointer place-items-center rounded-md text-muted transition-colors duration-200 hover:bg-surface-subtle hover:text-foreground"
       >
@@ -718,7 +718,7 @@ function ChatAddMenu({ actions }: { actions: ChatAddAction[] }) {
       {open && (
         <div
           role="menu"
-          aria-label="添加内容"
+          aria-label="Add content"
           className="absolute bottom-full left-0 z-50 mb-2 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
         >
           {actions.map((action) => (

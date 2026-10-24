@@ -81,10 +81,10 @@ describe("data task identity menu", () => {
     );
 
     for (const label of [
-      "Sign in",
-      "Create account",
-      "Forgot password",
-      "Verify email",
+      'title: "登录"',
+      'title: "创建账号"',
+      'title: "忘记密码"',
+      'title: "验证邮箱"',
     ]) {
       expect(authFlow).toContain(label);
     }
