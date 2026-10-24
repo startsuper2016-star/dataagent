@@ -60,6 +60,9 @@ const call = (
 const postJson = (subPath: string[], body: unknown): Promise<ConfigApiResponse> =>
   call("POST", subPath, bodyRequest(body));
 
+const putJson = (subPath: string[], body: unknown): Promise<ConfigApiResponse> =>
+  call("PUT", subPath, bodyRequest(body));
+
 const bodyOf = (response: ConfigApiResponse): ApiBody => response.body as ApiBody;
 
 const createSpcFixture = (path: string): void => {
@@ -250,6 +253,160 @@ describe("GET /api/v1/ontology/bindings", () => {
     const response = await postJson(["bindings"], {});
 
     expect(response.status).toBe(405);
+  });
+});
+
+describe("P1-C governance — GET /entities and /datasource/tables", () => {
+  it("lists all entities with attributes and latest binding (including draft)", async () => {
+    const response = await call("GET", ["entities"], bodyRequest(""));
+
+    expect(response.status).toBe(200);
+    const data = bodyOf(response).data as {
+      entities: Array<{ name: string; attributes: unknown[]; binding: { status: string } | null }>;
+    };
+    const ghost = data.entities.find((e) => e.name === "OrphanGhost");
+    expect(ghost?.binding?.status).toBe("draft");
+    const wafer = data.entities.find((e) => e.name === "AnomWafer");
+    expect(wafer?.attributes).toHaveLength(3);
+    expect(wafer?.binding?.status).toBe("approved");
+  });
+
+  it("rejects non-GET methods with 405", async () => {
+    const response = await postJson(["entities"], {});
+    expect(response.status).toBe(405);
+  });
+
+  it("introspects datasource tables with columns and a sample row", async () => {
+    const response = await call("GET", ["datasource", "tables"], bodyRequest(""));
+
+    expect(response.status).toBe(200);
+    const data = bodyOf(response).data as {
+      tables: Array<{ name: string; columns: Array<{ name: string }>; sample: Record<string, unknown> | null }>;
+    };
+    const wafer = data.tables.find((t) => t.name === "v_anom_wafer");
+    expect(wafer?.columns.map((c) => c.name)).toEqual(["id", "wafer_id", "chamber_id", "lot"]);
+    expect(wafer?.sample).toMatchObject({ wafer_id: "w-001" });
+  });
+});
+
+describe("P1-C governance — binding edit and approve", () => {
+  it("edits a binding (physical validation), demotes to draft, then re-approves", async () => {
+    // 1) 非法表名 → 400，绑定不动
+    const badTable = await putJson(["bindings", "AnomWafer"], {
+      table: "no_such_table",
+      idColumn: "id",
+      fieldMappings: [{ attribute_id: "attr-w1", source_column: "wafer_id" }]
+    });
+    expect(badTable.status).toBe(400);
+    expect(bodyOf(badTable).error?.message).toContain("no_such_table");
+
+    // 2) 非法列 → 400
+    const badColumn = await putJson(["bindings", "AnomWafer"], {
+      table: "v_anom_wafer",
+      idColumn: "id",
+      fieldMappings: [{ attribute_id: "attr-w1", source_column: "no_such_col" }]
+    });
+    expect(badColumn.status).toBe(400);
+
+    // 3) 合法编辑 → draft；approved-only 查询立刻 404
+    const edit = await putJson(["bindings", "AnomWafer"], {
+      table: "v_anom_wafer",
+      idColumn: "id",
+      fieldMappings: [
+        { attribute_id: "attr-w1", source_column: "wafer_id" },
+        { attribute_id: "attr-w2", source_column: "chamber_id" }
+      ]
+    });
+    expect(edit.status).toBe(200);
+    expect((edit.body as ApiBody & { data: { status: string } }).data.status).toBe("draft");
+    const queryWhileDraft = await postJson(["query"], { entity: "AnomWafer" });
+    expect(queryWhileDraft.status).toBe(404);
+
+    // 4) 覆盖率 2/3 ≥ 50% → 审批通过，查询恢复
+    const approve = await call("POST", ["bindings", "AnomWafer", "approve"], bodyRequest({}));
+    expect(approve.status).toBe(200);
+    const queryAfter = await postJson(["query"], { entity: "AnomWafer" });
+    expect(queryAfter.status).toBe(200);
+  });
+
+  it("rejects approval when mapping coverage is below 50%", async () => {
+    const edit = await putJson(["bindings", "AnomWafer"], {
+      table: "v_anom_wafer",
+      idColumn: "id",
+      fieldMappings: [{ attribute_id: "attr-w1", source_column: "wafer_id" }]
+    });
+    expect(edit.status).toBe(200);
+
+    const approve = await call("POST", ["bindings", "AnomWafer", "approve"], bodyRequest({}));
+    expect(approve.status).toBe(400);
+    expect(bodyOf(approve).error?.message).toContain("50%");
+    expect(bodyOf(approve).error?.code).toBe("BAD_REQUEST");
+  });
+});
+
+describe("P1-C governance — version lifecycle", () => {
+  it("runs create → check → submit(fail) → submit(pass) → publish → publish(conflict)", async () => {
+    // 1) 创建含 draft 绑定实体的版本：check 能看到失败项，submit 拒绝
+    const badVersion = await postJson(["versions"], {
+      name: "v-bad",
+      entityIds: [EID.wafer, EID.ghost]
+    });
+    expect(badVersion.status).toBe(200);
+    const badId = (bodyOf(badVersion).data as { id: string }).id;
+
+    const check = await call("GET", ["versions", badId, "check"], bodyRequest(""));
+    expect(check.status).toBe(200);
+    const checks = (bodyOf(check).data as { checks: Array<{ entity: string; ok: boolean; reason?: string }> }).checks;
+    expect(checks.find((c) => c.entity === "OrphanGhost")?.ok).toBe(false);
+
+    const failedSubmit = await call("POST", ["versions", badId, "submit"], bodyRequest({}));
+    expect(failedSubmit.status).toBe(409);
+    expect(bodyOf(failedSubmit).error?.code).toBe("CONFLICT");
+
+    // 2) 合规版本：create → submit（快照落库）→ publish
+    const goodVersion = await postJson(["versions"], {
+      name: "v-good",
+      description: "governance flow",
+      entityIds: [EID.wafer, EID.tool]
+    });
+    expect(goodVersion.status).toBe(200);
+    const good = bodyOf(goodVersion).data as { id: string; status: string; version_number: number };
+    expect(good.status).toBe("draft");
+    // 版本号按 ontology 递增：v-bad 已占 1，这里应为 2（也侧面验证失败创建未占号回滚正确）
+    expect(good.version_number).toBe(2);
+
+    const submit = await call("POST", ["versions", good.id, "submit"], bodyRequest({}));
+    expect(submit.status).toBe(200);
+    const submitted = bodyOf(submit).data as { status: string; snapshot: Record<string, unknown[]> };
+    expect(submitted.status).toBe("submitted");
+    expect(submitted.snapshot.bindings).toHaveLength(2);
+
+    const publish = await call("POST", ["versions", good.id, "publish"], bodyRequest({}));
+    expect(publish.status).toBe(200);
+    expect((bodyOf(publish).data as { status: string }).status).toBe("published");
+
+    // 3) 状态机：published 后再 publish → 409；draft 前置的 submit 也只能走一次
+    const republish = await call("POST", ["versions", good.id, "publish"], bodyRequest({}));
+    expect(republish.status).toBe(409);
+    const resubmit = await call("POST", ["versions", badId, "submit"], bodyRequest({}));
+    expect(resubmit.status).toBe(409);
+  });
+
+  it("rolls back version creation when an entity id is unknown", async () => {
+    const response = await postJson(["versions"], {
+      name: "v-ghost-id",
+      entityIds: [EID.wafer, "eid-nonexistent"]
+    });
+    expect(response.status).toBe(400);
+
+    const list = await call("GET", ["versions"], bodyRequest(""));
+    const versions = (bodyOf(list).data as { versions: Array<{ name: string }> }).versions;
+    expect(versions.find((v) => v.name === "v-ghost-id")).toBeUndefined();
+  });
+
+  it("returns 404 for an unknown version id", async () => {
+    const response = await call("GET", ["versions", "nope"], bodyRequest(""));
+    expect(response.status).toBe(404);
   });
 });
 

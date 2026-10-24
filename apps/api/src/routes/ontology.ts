@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -28,14 +29,29 @@ import type { ConfigApiContext, ConfigApiResponse } from "./types.js";
  *   同库，由本包 ensureOntologyTables 建立）；数据连接经 data_sources 行 SPC_MVP_SQLITE
  *   的 config_json.path 打开（path→conn 模块级缓存，路径变更即自然重建）。
  *
- * 端点（全部只读，不暴露写路径；数据连接以 readOnly 打开作第二道防线）：
+ * 端点分两组：
+ * 只读（数据连接以 readOnly 打开作第二道防线）：
  * - POST /api/v1/ontology/query    {entity, filters?, limit?, offset?} → {columns, rows, rowCount}
  * - POST /api/v1/ontology/sql      {sql, params?}                      → {columns, rows, rowCount}
  * - POST /api/v1/ontology/traverse {fromEntity, fromFilters?, toEntity, limit?} → {columns, rows, rowCount}
  * - GET  /api/v1/ontology/bindings                                     → {bindings: [{entity, table, status}]}
+ * - GET  /api/v1/ontology/context                                      → {bindings, relations, functions}
  *
- * 错误约定：未知实体/缺参数/坏 JSON/SQL 白名单拒绝 → 400；实体无 approved 绑定、关系路径
- * 不存在、SPC 数据源缺失、未知端点 → 404；其余（含数据侧打开失败/元数据损坏）→ 500。
+ * 治理写路径（P1-C 编辑流；ont_* 元数据写，数据源连接仍只读）：
+ * - GET  /api/v1/ontology/entities                → {entities: [{id,name,status,attributes:[...],binding:{...}|null}]}
+ * - GET  /api/v1/ontology/datasource/tables       → {tables: [{name, columns: [{name,type}], sample?}]}
+ * - PUT  /api/v1/ontology/bindings/:entity        {table, idColumn, fieldMappings, filterExpr?} → 编辑即打回 draft
+ * - POST /api/v1/ontology/bindings/:entity/approve → 校验（物理表/列存在 + id_column + 覆盖率≥50%）→ approved
+ * - GET|POST /api/v1/ontology/versions            → 版本清单 / 创建 draft（{name, description?, entityIds}）
+ * - GET  /api/v1/ontology/versions/:id            → 版本详情（含实体清单与一致性检查）
+ * - POST /api/v1/ontology/versions/:id/submit     → 一致性检查全过 → 快照组件 → submitted
+ * - POST /api/v1/ontology/versions/:id/publish    → submitted → published
+ *
+ * 写守卫：与会话认证同惯例（config-api 分发链已解析 session/bearer），无独立角色体系；
+ * 写面仅限 ont_* 表，物理数据连接保持 readOnly。
+ *
+ * 错误约定：未知实体/缺参数/坏 JSON/校验失败/SQL 白名单拒绝 → 400；实体无 approved 绑定、关系路径
+ * 不存在、SPC 数据源缺失、未知端点 → 404；状态机非法迁移 → 409；其余（含数据侧打开失败/元数据损坏）→ 500。
  */
 
 /** 路由只消费 metadataStore + userId；结构化子集让 handler 级测试免搭全套网关依赖。 */
@@ -68,7 +84,6 @@ class OntologyHttpError extends Error {
     this.name = "OntologyHttpError";
   }
 }
-
 export const handleOntologyRequest = async (
   request: IncomingMessage,
   method: string | undefined,
@@ -76,6 +91,7 @@ export const handleOntologyRequest = async (
   context: OntologyRouteContext
 ): Promise<ConfigApiResponse> => {
   try {
+    const db = context.metadataStore.db;
     switch (subPath[0] ?? "") {
       case "query":
         return await handleQuery(request, method, context);
@@ -84,9 +100,15 @@ export const handleOntologyRequest = async (
       case "traverse":
         return await handleTraverse(request, method, context);
       case "bindings":
-        return handleBindings(method, context.metadataStore.db);
+        return await handleBindingsRoute(request, method, subPath.slice(1), context);
       case "context":
-        return handleContext(method, context.metadataStore.db);
+        return handleContext(method, db);
+      case "entities":
+        return handleEntities(method, db);
+      case "datasource":
+        return await handleDatasourceTables(method, subPath.slice(1), context);
+      case "versions":
+        return await handleVersionsRoute(request, method, subPath.slice(1), context);
       default:
         throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知本体端点: ${subPath[0] ?? ""}`);
     }
@@ -160,17 +182,455 @@ const handleTraverse = async (
   );
 };
 
-const handleBindings = (method: string | undefined, db: DatabaseSync): ConfigApiResponse => {
+const handleBindingsRoute = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  if (rest.length === 0) {
+    // 契约保持 approved-only（smoke 脚本与 MCP 侧依赖）；治理全量清单走 GET /entities
+    requireMethod(method, "GET");
+    const rows = db
+      .prepare(
+        `SELECT e.name AS entity, b.table_name AS "table", b.status AS status
+         FROM ont_bindings b JOIN ont_entities e ON e.id = b.entity_id
+         WHERE b.status = 'approved' ORDER BY e.name`
+      )
+      .all();
+    return ok({ bindings: rows });
+  }
+  const entityName = rest[0];
+  if (!entityName) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少实体名");
+  }
+  if (rest.length === 1) {
+    requireMethod(method, "PUT");
+    return handleBindingUpdate(request, entityName, db, context);
+  }
+  if (rest.length === 2 && rest[1] === "approve") {
+    requireMethod(method, "POST");
+    return handleBindingApprove(entityName, db, context);
+  }
+  throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知绑定端点: ${rest.join("/")}`);
+};
+
+/** PUT /bindings/:entity —— 覆盖表/ID列/字段映射；编辑即打回 draft（重走审批）。 */
+const handleBindingUpdate = async (
+  request: IncomingMessage,
+  entityName: string,
+  db: DatabaseSync,
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const entityId = requireEntityId(db, entityName);
+  const body = await readJsonBody(request);
+  const table = stringValue(body.table);
+  const idColumn = stringValue(body.idColumn);
+  const mappings = arrayValue(body.fieldMappings);
+  if (!table || !idColumn || !mappings) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 table/idColumn/fieldMappings");
+  }
+  const conn = openSpcConnection(context.metadataStore, context.userId);
+  assertTableAndColumns(conn, table, idColumn, mappings);
+  const bindingId = requireBindingId(db, entityId);
+  db.prepare(
+    `UPDATE ont_bindings SET table_name = ?, id_column = ?, field_mappings_json = ?,
+            filter_expr = COALESCE(?, filter_expr), status = 'draft' WHERE id = ?`
+  ).run(
+    table,
+    idColumn,
+    JSON.stringify(
+      mappings.map((m) => ({ attribute_id: String(m.attribute_id ?? ""), source_column: String(m.source_column ?? "") }))
+    ),
+    stringValue(body.filterExpr) ?? null,
+    bindingId
+  );
+  return ok(bindingRow(db, bindingId, entityName));
+};
+
+/** POST /bindings/:entity/approve —— 审批校验：物理列存在 + id_column + 映射覆盖 ≥50% 属性。 */
+const handleBindingApprove = (
+  entityName: string,
+  db: DatabaseSync,
+  context: OntologyRouteContext
+): ConfigApiResponse => {
+  const entityId = requireEntityId(db, entityName);
+  const bindingId = requireBindingId(db, entityId);
+  const binding = db
+    .prepare("SELECT table_name, id_column, field_mappings_json FROM ont_bindings WHERE id = ?")
+    .get(bindingId) as { table_name: string; id_column: string; field_mappings_json: string };
+  const mappings = safeJsonParse(binding.field_mappings_json);
+  if (!Array.isArray(mappings) || mappings.length === 0) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "字段映射为空，无法审批");
+  }
+  const conn = openSpcConnection(context.metadataStore, context.userId);
+  assertTableAndColumns(
+    conn,
+    binding.table_name,
+    binding.id_column,
+    mappings as { attribute_id?: unknown; source_column?: unknown }[]
+  );
+  const total = db.prepare("SELECT COUNT(*) AS n FROM ont_attributes WHERE entity_id = ?").get(entityId) as {
+    n: number;
+  };
+  if (total.n > 0 && mappings.length * 2 < total.n) {
+    throw new OntologyHttpError(
+      400,
+      "BAD_REQUEST",
+      `映射覆盖 ${mappings.length}/${total.n} 低于 50%，无法审批`
+    );
+  }
+  db.prepare("UPDATE ont_bindings SET status = 'approved' WHERE id = ?").run(bindingId);
+  return ok(bindingRow(db, bindingId, entityName));
+};
+
+/** GET /entities —— 治理视图：实体 + 属性 + 当前绑定（含 draft）。 */
+const handleEntities = (method: string | undefined, db: DatabaseSync): ConfigApiResponse => {
   requireMethod(method, "GET");
-  const rows = db
+  const entities = db
+    .prepare("SELECT id, name, name_cn, status, tier FROM ont_entities ORDER BY name")
+    .all() as { id: string; name: string; name_cn: string | null; status: string; tier: number }[];
+  const attrStmt = db.prepare(
+    "SELECT id, name, display_name, type, required FROM ont_attributes WHERE entity_id = ? ORDER BY sort, name"
+  );
+  const bindingStmt = db.prepare(
+    "SELECT id, table_name, id_column, field_mappings_json, filter_expr, status FROM ont_bindings WHERE entity_id = ? ORDER BY rowid DESC LIMIT 1"
+  );
+  return ok({
+    entities: entities.map((e) => ({
+      ...e,
+      attributes: attrStmt.all(e.id),
+      binding: (bindingStmt.get(e.id) as Record<string, unknown> | undefined) ?? null
+    }))
+  });
+};
+
+/** GET /datasource/tables —— SPC 数据源物理表/视图 + 列 + 首行样例（映射编辑器左栏）。 */
+const handleDatasourceTables = async (
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  requireMethod(method, "GET");
+  if (rest[0] !== "tables") {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知数据源端点: ${rest.join("/")}`);
+  }
+  const conn = openSpcConnection(context.metadataStore, context.userId);
+  const names = (
+    conn
+      .prepare(
+        "SELECT name, type FROM sqlite_master WHERE (type = 'table' OR type = 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name"
+      )
+      .all() as { name: string; type: string }[]
+  ).filter((t) => isSafeIdentifier(t.name));
+  const tables = names.map(({ name, type }) => {
+    const columns = conn
+      .prepare("SELECT name, type FROM pragma_table_info(?)")
+      .all(name) as { name: string; type: string }[];
+    let sample: Record<string, unknown> | null = null;
+    try {
+      const row = conn.prepare(`SELECT * FROM "${name}" LIMIT 1`).get() as
+        | Record<string, unknown>
+        | undefined;
+      sample = row ?? null;
+    } catch {
+      sample = null;
+    }
+    return { name, kind: type, columns, sample };
+  });
+  return ok({ tables });
+};
+
+const handleVersionsRoute = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  if (rest.length === 0) {
+    if (method === "GET") {
+      return ok({ versions: listVersions(db) });
+    }
+    requireMethod(method, "POST");
+    return handleVersionCreate(request, db);
+  }
+  const versionId = rest[0];
+  if (!versionId) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少版本 ID");
+  }
+  if (rest.length === 1) {
+    requireMethod(method, "GET");
+    return ok(versionDetail(db, versionId));
+  }
+  if (rest.length === 2 && rest[1] === "check") {
+    requireMethod(method, "GET");
+    return ok({ checks: versionEntityIds(db, versionId).map((id) => checkEntityConsistency(db, id)) });
+  }
+  if (rest.length === 2 && rest[1] === "submit") {
+    requireMethod(method, "POST");
+    return handleVersionSubmit(versionId, db);
+  }
+  if (rest.length === 2 && rest[1] === "publish") {
+    requireMethod(method, "POST");
+    return handleVersionPublish(versionId, db);
+  }
+  throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知版本端点: ${rest.join("/")}`);
+};
+
+/** POST /versions —— 创建 draft 版本并登记选中实体（元枢发布四步的第一步）。 */
+const handleVersionCreate = async (
+  request: IncomingMessage,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const body = await readJsonBody(request);
+  const name = stringValue(body.name);
+  const entityIds = arrayValue(body.entityIds)?.map((v) => String(v)) ?? [];
+  if (!name || entityIds.length === 0) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 name 或 entityIds");
+  }
+  const firstEntityId = entityIds[0];
+  if (typeof firstEntityId !== "string") {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "entityIds 含非法项");
+  }
+  const ontologyId = (
+    db.prepare("SELECT ontology_id FROM ont_entities WHERE id = ?").get(firstEntityId) as
+      | { ontology_id: string }
+      | undefined
+  )?.ontology_id;
+  if (!ontologyId) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "entityIds 首项不是已知实体");
+  }
+  const versionId = randomUUID();
+  const insertVersion = db.prepare(
+    `INSERT INTO ont_versions (id, ontology_id, version_number, status, name, description, created_at)
+     VALUES (?, ?, (SELECT COALESCE(MAX(version_number), 0) + 1 FROM ont_versions WHERE ontology_id = ?),
+             'draft', ?, ?, ?)`
+  );
+  const insertEntity = db.prepare(
+    "INSERT INTO ont_version_entities (version_id, version_entity_id, source_entity_id) VALUES (?, ?, ?)"
+  );
+  const now = new Date().toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertVersion.run(versionId, ontologyId, ontologyId, name, stringValue(body.description) ?? null, now);
+    for (const entityId of entityIds) {
+      if (!db.prepare("SELECT 1 FROM ont_entities WHERE id = ?").get(entityId)) {
+        throw new OntologyHttpError(400, "BAD_REQUEST", `未知实体: ${entityId}`);
+      }
+      insertEntity.run(versionId, randomUUID(), entityId);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return ok(versionDetail(db, versionId));
+};
+
+/** POST /versions/:id/submit —— 一致性检查（绑定 approved + id_column + 覆盖率≥50%），全过则快照组件。 */
+const handleVersionSubmit = (versionId: string, db: DatabaseSync): ConfigApiResponse => {
+  requireVersion(db, versionId, "draft");
+  const entityIds = versionEntityIds(db, versionId);
+  const checks = entityIds.map((entityId) => checkEntityConsistency(db, entityId));
+  const failed = checks.filter((c) => !c.ok);
+  if (failed.length > 0) {
+    throw new OntologyHttpError(
+      409,
+      "CONFLICT",
+      `一致性检查未通过：${failed.map((c) => `${c.entity}: ${c.reason}`).join("；")}（用 check 端点查看明细）`
+    );
+  }
+  const snapshot: Record<string, unknown[]> = { entities: [], attributes: [], bindings: [], relations: [] };
+  snapshot.entities = db
     .prepare(
-      `SELECT e.name AS entity, b.table_name AS "table", b.status AS status
-       FROM ont_bindings b JOIN ont_entities e ON e.id = b.entity_id
-       WHERE b.status = 'approved' ORDER BY e.name`
+      `SELECT * FROM ont_entities WHERE id IN (${entityIds.map(() => "?").join(",")})`
+    )
+    .all(...entityIds);
+  snapshot.attributes = db
+    .prepare(
+      `SELECT * FROM ont_attributes WHERE entity_id IN (${entityIds.map(() => "?").join(",")})`
+    )
+    .all(...entityIds);
+  snapshot.bindings = db
+    .prepare(
+      `SELECT * FROM ont_bindings WHERE entity_id IN (${entityIds.map(() => "?").join(",")}) AND status = 'approved'`
+    )
+    .all(...entityIds);
+  snapshot.relations = db
+    .prepare(
+      `SELECT * FROM ont_relations WHERE from_entity_id IN (${entityIds.map(() => "?").join(",")})
+       AND to_entity_id IN (${entityIds.map(() => "?").join(",")})`
+    )
+    .all(...entityIds, ...entityIds);
+  db.prepare(
+    "UPDATE ont_versions SET status = 'submitted', config_snapshot_json = ?, submitted_at = ? WHERE id = ?"
+  ).run(JSON.stringify(snapshot), new Date().toISOString(), versionId);
+  return ok({ ...versionDetail(db, versionId), checks });
+};
+
+/** POST /versions/:id/publish —— submitted → published（终态）。 */
+const handleVersionPublish = (versionId: string, db: DatabaseSync): ConfigApiResponse => {
+  requireVersion(db, versionId, "submitted");
+  db.prepare("UPDATE ont_versions SET status = 'published', published_at = ? WHERE id = ?").run(
+    new Date().toISOString(),
+    versionId
+  );
+  return ok(versionDetail(db, versionId));
+};
+
+// --- 版本/绑定辅助 -------------------------------------------------------------------
+
+/** 每实体一致性检查项（元枢规则：绑定 approved + id_column 登记 + 映射覆盖 ≥50% 属性）。 */
+const checkEntityConsistency = (
+  db: DatabaseSync,
+  entityId: string
+): { entity: string; ok: boolean; reason?: string } => {
+  const entity = db.prepare("SELECT name FROM ont_entities WHERE id = ?").get(entityId) as
+    | { name: string }
+    | undefined;
+  const name = entity?.name ?? entityId;
+  const binding = db
+    .prepare("SELECT status, table_name, id_column, field_mappings_json FROM ont_bindings WHERE entity_id = ?")
+    .get(entityId) as
+    | { status: string; table_name: string; id_column: string; field_mappings_json: string }
+    | undefined;
+  if (!binding) {
+    return { entity: name, ok: false, reason: "无绑定" };
+  }
+  if (binding.status !== "approved") {
+    return { entity: name, ok: false, reason: `绑定状态 ${binding.status}（需 approved）` };
+  }
+  if (!binding.id_column) {
+    return { entity: name, ok: false, reason: "未登记 id_column" };
+  }
+  const mappings = safeJsonParse(binding.field_mappings_json);
+  const mapped = Array.isArray(mappings) ? mappings.length : 0;
+  const total = (db.prepare("SELECT COUNT(*) AS n FROM ont_attributes WHERE entity_id = ?").get(entityId) as { n: number }).n;
+  if (total > 0 && mapped * 2 < total) {
+    return { entity: name, ok: false, reason: `映射覆盖 ${mapped}/${total} 低于 50%` };
+  }
+  return { entity: name, ok: true };
+};
+
+const requireVersion = (
+  db: DatabaseSync,
+  versionId: string,
+  expectedStatus: string
+): { id: string; status: string } => {
+  const version = db.prepare("SELECT id, status FROM ont_versions WHERE id = ?").get(versionId) as
+    | { id: string; status: string }
+    | undefined;
+  if (!version) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知版本: ${versionId}`);
+  }
+  if (version.status !== expectedStatus) {
+    throw new OntologyHttpError(
+      409,
+      "CONFLICT",
+      `版本状态为 ${version.status}，该操作要求 ${expectedStatus}`
+    );
+  }
+  return version;
+};
+
+const versionEntityIds = (db: DatabaseSync, versionId: string): string[] =>
+  (
+    db
+      .prepare("SELECT source_entity_id FROM ont_version_entities WHERE version_id = ?")
+      .all(versionId) as { source_entity_id: string }[]
+  ).map((row) => row.source_entity_id);
+
+const listVersions = (db: DatabaseSync): unknown[] =>
+  db
+    .prepare(
+      `SELECT v.id, v.version_number, v.status, v.name, v.description, v.created_at, v.submitted_at, v.published_at,
+              (SELECT COUNT(*) FROM ont_version_entities x WHERE x.version_id = v.id) AS entity_count
+       FROM ont_versions v ORDER BY v.version_number DESC`
     )
     .all();
-  return ok({ bindings: rows });
+
+const versionDetail = (db: DatabaseSync, versionId: string): Record<string, unknown> => {
+  const version = db
+    .prepare(
+      "SELECT id, ontology_id, version_number, status, name, description, created_at, submitted_at, published_at FROM ont_versions WHERE id = ?"
+    )
+    .get(versionId) as Record<string, unknown> | undefined;
+  if (!version) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知版本: ${versionId}`);
+  }
+  const entityIds = versionEntityIds(db, versionId);
+  const entities =
+    entityIds.length > 0
+      ? db
+          .prepare(
+            `SELECT id, name, name_cn, status FROM ont_entities WHERE id IN (${entityIds.map(() => "?").join(",")})`
+          )
+          .all(...entityIds)
+      : [];
+  const snapshot = safeJsonParse(
+    (db.prepare("SELECT config_snapshot_json FROM ont_versions WHERE id = ?").get(versionId) as { config_snapshot_json: string | null }).config_snapshot_json ?? ""
+  );
+  return { ...version, entities, snapshot: recordValue(snapshot) ?? null };
 };
+
+const bindingRow = (db: DatabaseSync, bindingId: string, entityName: string): unknown => {
+  const row = db
+    .prepare(
+      `SELECT b.id, ? AS entity, b.table_name AS "table", b.id_column AS id_column,
+              b.field_mappings_json AS field_mappings, b.filter_expr, b.status
+       FROM ont_bindings b WHERE b.id = ?`
+    )
+    .get(entityName, bindingId);
+  return row;
+};
+
+const requireBindingId = (db: DatabaseSync, entityId: string): string => {
+  const row = db.prepare("SELECT id FROM ont_bindings WHERE entity_id = ?").get(entityId) as
+    | { id: string }
+    | undefined;
+  if (!row) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "实体尚无绑定，先在本体建模侧创建");
+  }
+  return row.id;
+};
+
+/**
+ * 物理校验：表存在、id_column 与全部 source_column 在表中存在。
+ * 标识符先过 isSafeIdentifier（纯字母数字下划线/中文），再用双引号拼接，杜绝注入面。
+ */
+const assertTableAndColumns = (
+  conn: DatabaseSync,
+  table: string,
+  idColumn: string,
+  mappings: { attribute_id?: unknown; source_column?: unknown }[]
+): void => {
+  if (!isSafeIdentifier(table) || !isSafeIdentifier(idColumn)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "表名/ID 列含非法字符");
+  }
+  const exists = conn
+    .prepare("SELECT 1 FROM sqlite_master WHERE name = ? AND (type = 'table' OR type = 'view')")
+    .get(table);
+  if (!exists) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `数据源中不存在表: ${table}`);
+  }
+  const columns = new Set(
+    (conn.prepare("SELECT name FROM pragma_table_info(?)").all(table) as { name: string }[]).map((c) => c.name)
+  );
+  if (!columns.has(idColumn)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `表 ${table} 中不存在 ID 列: ${idColumn}`);
+  }
+  for (const mapping of mappings) {
+    const column = typeof mapping.source_column === "string" ? mapping.source_column : "";
+    if (!isSafeIdentifier(column) || !columns.has(column)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `表 ${table} 中不存在映射列: ${column}`);
+    }
+  }
+};
+
+/** 标识符白名单：字母/数字/下划线/中文，防引号与括号注入（拼 PRAGMA/SELECT 场景的硬前置）。 */
+const isSafeIdentifier = (name: string): boolean => /^[\p{L}\p{N}_]+$/u.test(name);
 
 const handleContext = (method: string | undefined, db: DatabaseSync): ConfigApiResponse => {
   requireMethod(method, "GET");
@@ -296,7 +756,10 @@ const traversableEdges = (db: DatabaseSync): RelationEdge[] => {
 
 // --- 传输辅助 ----------------------------------------------------------------------
 
-const requireMethod = (method: string | undefined, expected: "GET" | "POST"): void => {
+const requireMethod = (
+  method: string | undefined,
+  expected: "GET" | "POST" | "PUT"
+): void => {
   if (method !== expected) {
     throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（需要 ${expected}）。`);
   }
@@ -361,6 +824,8 @@ const recordValue = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+const arrayValue = (value: unknown): Record<string, unknown>[] | undefined =>
+  Array.isArray(value) ? (value as Record<string, unknown>[]) : undefined;
 const filtersOf = (body: Record<string, unknown>): Filters => recordValue(body.filters) ?? {};
 const safeJsonParse = (raw: string): unknown => {
   try {

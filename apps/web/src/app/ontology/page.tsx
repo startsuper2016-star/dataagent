@@ -76,22 +76,37 @@ export default function OntologyPage() {
             {context.relations.length} 关系 · {context.functions.length} 函数
           </p>
         </div>
-        <a
-          href="/data-tasks"
-          className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          返回工作台
-        </a>
+        <div className="flex gap-3">
+          <a
+            href="/ontology/versions"
+            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            版本发布
+          </a>
+          <a
+            href="/data-tasks"
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            返回工作台
+          </a>
+        </div>
       </header>
 
       <Section title="绑定（Entity → Datasource）">
         <Table
-          headers={["实体", "数据表", "ID 列", "状态"]}
+          headers={["实体", "数据表", "ID 列", "状态", "操作"]}
           rows={context.bindings.map((b) => [
             b.entity,
             b.table,
             b.id_column,
             <StatusPill key={b.entity} status={b.status} />,
+            <a
+              key={b.entity}
+              href={`/ontology/bindings/${encodeURIComponent(b.entity)}`}
+              className="text-blue-600 hover:underline"
+            >
+              编辑
+            </a>,
           ])}
         />
       </Section>
