@@ -149,6 +149,10 @@ const DataLinkPanel = nextDynamic(
   () => import("./components/DataLinkPanel").then((m) => m.DataLinkPanel),
   { ssr: false, loading: () => null },
 );
+const OntologyPanel = nextDynamic(
+  () => import("./components/ontology/OntologyPanel").then((m) => m.OntologyPanel),
+  { ssr: false, loading: () => null },
+);
 const DatasourceSchemaPreviewPopover = nextDynamic(
   () => import("./components/SchemaBrowserPanel").then((m) => m.DatasourceSchemaPreviewPopover),
   { ssr: false, loading: () => null },
@@ -1081,6 +1085,7 @@ function DataTaskWorkspace({
   );
   const [workspaceFilesPanelOpen, setWorkspaceFilesPanelOpen] = useState(false);
   const [dataLinkPanelOpen, setDataLinkPanelOpen] = useState(false);
+  const [ontologyPanelOpen, setOntologyPanelOpen] = useState(false);
   const [workspaceFileAssets, setWorkspaceFileAssets] = useState<FileAssetRefDto[]>([]);
   const [promotedArtifactIds, setPromotedArtifactIds] = useState<Set<string>>(
     () => new Set(),
@@ -1156,7 +1161,8 @@ function DataTaskWorkspace({
     setSelectedEvidenceRefs([]);
   }, []);
 
-  const sidePanelOpen = Boolean(configPanel) || workspaceFilesPanelOpen || dataLinkPanelOpen;
+  const sidePanelOpen =
+    Boolean(configPanel) || workspaceFilesPanelOpen || dataLinkPanelOpen || ontologyPanelOpen;
   const {
     containerRef: gridRef,
     viewportWidth: workspaceViewportWidth,
@@ -1169,7 +1175,7 @@ function DataTaskWorkspace({
     onResizeStart: onLeftPanelResizeStart,
     resetWidth: resetLeftPanelWidth,
   } = useLeftPanelResize({
-    enabled: !configPanel && !workspaceFilesPanelOpen && !dataLinkPanelOpen && !userSidebarCollapsed,
+    enabled: !configPanel && !workspaceFilesPanelOpen && !dataLinkPanelOpen && !ontologyPanelOpen && !userSidebarCollapsed,
   });
 
   // Cap the right panel drag to what still fits *alongside the current left
@@ -1188,7 +1194,7 @@ function DataTaskWorkspace({
     onResizeStart: onRightPanelResizeStart,
     resetWidth: resetRightPanelWidth,
   } = usePanelResize({
-    enabled: !configPanel && !workspaceFilesPanelOpen && !dataLinkPanelOpen,
+    enabled: !configPanel && !workspaceFilesPanelOpen && !dataLinkPanelOpen && !ontologyPanelOpen,
     maxWidth: rightPanelDockableMaxWidth,
   });
 
@@ -1307,6 +1313,17 @@ function DataTaskWorkspace({
 
   const closeDataLinkPanel = useCallback(() => {
     setDataLinkPanelOpen(false);
+  }, []);
+
+  const openOntologyPanel = useCallback(() => {
+    setConfigPanel(null);
+    setWorkspaceFilesPanelOpen(false);
+    setDataLinkPanelOpen(false);
+    setOntologyPanelOpen((open) => !open);
+  }, []);
+
+  const closeOntologyPanel = useCallback(() => {
+    setOntologyPanelOpen(false);
   }, []);
 
   useEffect(() => {
@@ -2114,6 +2131,7 @@ function DataTaskWorkspace({
         activeConfigPanel={configPanel}
         activeDataLinkPanel={dataLinkPanelOpen}
         activeFilesPanel={workspaceFilesPanelOpen}
+        activeOntologyPanel={ontologyPanelOpen}
         collapsed={sidebarCollapsed}
         leftPanelWidth={leftPanelWidth}
         isLeftPanelResizing={isLeftPanelResizing}
@@ -2129,6 +2147,7 @@ function DataTaskWorkspace({
         onOpenConfigPanel={openConfigPanel}
         onOpenDataLinkPanel={openDataLinkPanel}
         onOpenFilesPanel={openWorkspaceFilesPanel}
+        onOpenOntologyPanel={openOntologyPanel}
         onQueryChange={setQuery}
         onToggleCollapse={toggleSidebar}
         onSelectSession={(sessionId) => {
@@ -2172,7 +2191,9 @@ function DataTaskWorkspace({
         }
       />
 
-      {dataLinkPanelOpen ? (
+      {ontologyPanelOpen ? (
+        <OntologyPanel onBack={closeOntologyPanel} />
+      ) : dataLinkPanelOpen ? (
         <DataLinkPanel
           onBack={closeDataLinkPanel}
           onOpenMcpSettings={() => {
@@ -4832,6 +4853,7 @@ type SessionPaneProps = {
   activeConfigPanel: WorkspaceConfigPanelKey | null;
   activeDataLinkPanel: boolean;
   activeFilesPanel: boolean;
+  activeOntologyPanel: boolean;
   collapsed: boolean;
   leftPanelWidth: number;
   isLeftPanelResizing: boolean;
@@ -4849,6 +4871,7 @@ type SessionPaneProps = {
   onOpenConfigPanel: (panel: WorkspaceConfigPanelKey) => void;
   onOpenDataLinkPanel: () => void;
   onOpenFilesPanel: () => void;
+  onOpenOntologyPanel: () => void;
   onQueryChange: (value: string) => void;
   onToggleCollapse: () => void;
   onSelectSession: (sessionId: string) => void;
@@ -4862,6 +4885,7 @@ function SessionPane({
   activeConfigPanel,
   activeDataLinkPanel,
   activeFilesPanel,
+  activeOntologyPanel,
   collapsed,
   leftPanelWidth,
   isLeftPanelResizing,
@@ -4879,6 +4903,7 @@ function SessionPane({
   onOpenConfigPanel,
   onOpenDataLinkPanel,
   onOpenFilesPanel,
+  onOpenOntologyPanel,
   onQueryChange,
   onToggleCollapse,
   onSelectSession,
@@ -4912,6 +4937,7 @@ function SessionPane({
               activeConfigPanel={activeConfigPanel}
               activeDataLinkPanel={activeDataLinkPanel}
               activeFilesPanel={activeFilesPanel}
+              activeOntologyPanel={activeOntologyPanel}
               filteredSessions={filteredSessions}
               query={query}
               sessionCount={sessionCount}
@@ -4924,6 +4950,7 @@ function SessionPane({
               onOpenConfigPanel={onOpenConfigPanel}
               onOpenDataLinkPanel={onOpenDataLinkPanel}
               onOpenFilesPanel={onOpenFilesPanel}
+              onOpenOntologyPanel={onOpenOntologyPanel}
               onQueryChange={onQueryChange}
               onToggleCollapse={onToggleCollapse}
               onSelectSession={onSelectSession}
@@ -4970,6 +4997,7 @@ function SessionPane({
         activeConfigPanel={activeConfigPanel}
         activeDataLinkPanel={activeDataLinkPanel}
         activeFilesPanel={activeFilesPanel}
+        activeOntologyPanel={activeOntologyPanel}
         filteredSessions={filteredSessions}
         query={query}
         sessionCount={sessionCount}
@@ -4982,6 +5010,7 @@ function SessionPane({
         onOpenConfigPanel={onOpenConfigPanel}
         onOpenDataLinkPanel={onOpenDataLinkPanel}
         onOpenFilesPanel={onOpenFilesPanel}
+        onOpenOntologyPanel={onOpenOntologyPanel}
         onQueryChange={onQueryChange}
         onToggleCollapse={onToggleCollapse}
         onSelectSession={onSelectSession}
@@ -5009,6 +5038,7 @@ function SessionPaneContent({
   activeConfigPanel,
   activeDataLinkPanel,
   activeFilesPanel,
+  activeOntologyPanel,
   filteredSessions,
   query,
   sessionCount,
@@ -5021,6 +5051,7 @@ function SessionPaneContent({
   onOpenConfigPanel,
   onOpenDataLinkPanel,
   onOpenFilesPanel,
+  onOpenOntologyPanel,
   onQueryChange,
   onToggleCollapse,
   onSelectSession,
@@ -5101,9 +5132,14 @@ function SessionPaneContent({
           ))}
           {/* Ontology modeling is a standalone governance route (/ontology), not an
               in-workbench panel — hence a plain link card instead of a nav action. */}
-          <a
-            href="/ontology"
-            className="group flex min-h-8 w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors duration-200 hover:bg-surface/80"
+          <button
+            type="button"
+            onClick={onOpenOntologyPanel}
+            aria-current={activeOntologyPanel ? "page" : undefined}
+            className={[
+              "group flex min-h-8 w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors duration-200",
+              activeOntologyPanel ? "bg-surface shadow-[var(--shadow-card)]" : "hover:bg-surface/80",
+            ].join(" ")}
           >
             <span
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border bg-surface-subtle text-muted-light transition-colors duration-200 group-hover:text-foreground"
@@ -5122,7 +5158,7 @@ function SessionPaneContent({
             <span className="min-w-12 shrink-0 text-right tabular text-[10px] leading-snug text-muted-light">
               ↗
             </span>
-          </a>
+          </button>
         </div>
       </div>
 
