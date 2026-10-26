@@ -26,6 +26,17 @@ const DDL = [
   `CREATE TABLE IF NOT EXISTS ont_skill_bindings (
     id TEXT PRIMARY KEY, skill_id TEXT NOT NULL, version INTEGER NOT NULL,
     skill_name TEXT, entity_ids_json TEXT)`,
+  `CREATE TABLE IF NOT EXISTS ont_rules (
+    id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES ont_entities(id),
+    name TEXT NOT NULL, rule_type TEXT DEFAULT 'inference', carrier TEXT,
+    conditions_json TEXT, conclusion TEXT, enabled INTEGER DEFAULT 1,
+    description TEXT, created_at TEXT, updated_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS ont_actions (
+    id TEXT PRIMARY KEY, entity_id TEXT NOT NULL REFERENCES ont_entities(id),
+    code TEXT NOT NULL, name TEXT NOT NULL, executor TEXT DEFAULT 'sql',
+    config_json TEXT, risk TEXT DEFAULT 'LOW', discovery TEXT DEFAULT 'confirm',
+    intent TEXT, params_json TEXT, enabled INTEGER DEFAULT 1,
+    description TEXT, created_at TEXT, updated_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS ont_versions (
     id TEXT PRIMARY KEY, ontology_id TEXT NOT NULL, version_number INTEGER NOT NULL,
     status TEXT DEFAULT 'draft', name TEXT, description TEXT,

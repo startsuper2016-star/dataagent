@@ -808,6 +808,137 @@ describe("P3-4 designer — relations", () => {
   });
 });
 
+describe("P3-5 designer — rules and actions", () => {
+  it("creates inference and logic rules with condition validation, updates and deletes", async () => {
+    const created = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "chamber_watch",
+      ruleType: "inference",
+      conditions: [{ field: "chamber_id", op: "=", value: "CH1" }],
+      then: "标记为 CH1 观察对象",
+    });
+    expect(created.status).toBe(200);
+    const rule = bodyOf(created).data as { id: string; expr: string; entity: string };
+    expect(rule.entity).toBe("AnomWafer");
+    expect(rule.expr).toBe("WHEN chamber_id = CH1 THEN 标记为 CH1 观察对象");
+
+    const duplicate = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "chamber_watch",
+      ruleType: "inference",
+      then: "x",
+    });
+    expect(duplicate.status).toBe(409);
+
+    const badField = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "bad_field_rule",
+      conditions: [{ field: "no_such_attr", op: "=", value: 1 }],
+      then: "x",
+    });
+    expect(badField.status).toBe(400);
+    expect(bodyOf(badField).error?.message).toContain("已登记属性");
+
+    const noThen = await postJson(["rules"], { entity: "AnomWafer", name: "no_then", ruleType: "inference" });
+    expect(noThen.status).toBe(400);
+
+    const badType = await postJson(["rules"], { entity: "AnomWafer", name: "bad_type", ruleType: "magic" });
+    expect(badType.status).toBe(400);
+
+    const updated = await putJson(["rules", rule.id], {
+      entity: "AnomWafer",
+      name: "chamber_watch",
+      ruleType: "validation",
+      conditions: [{ field: "lot", op: "!=", value: "" }],
+      then: "判定批次有效",
+      enabled: false,
+    });
+    expect(updated.status).toBe(200);
+    expect((bodyOf(updated).data as { enabled: number; rule_type: string }).enabled).toBe(0);
+
+    const logic = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "lot_summary_sql",
+      ruleType: "logic",
+      carrier: "sql",
+      then: "SELECT lot, COUNT(*) FROM v_anom_wafer GROUP BY lot",
+    });
+    expect(logic.status).toBe(200);
+    expect((bodyOf(logic).data as { expr: string }).expr).toContain("GROUP BY");
+
+    const list = await call("GET", ["rules"], bodyRequest(""));
+    const names = (bodyOf(list).data as { rules: Array<{ name: string; enabled: number }> }).rules;
+    expect(names.find((r) => r.name === "chamber_watch")?.enabled).toBe(0);
+
+    const deleted = await delJson(["rules", rule.id]);
+    expect(deleted.status).toBe(200);
+    const deletedAgain = await delJson(["rules", rule.id]);
+    expect(deletedAgain.status).toBe(404);
+  });
+
+  it("creates actions with executor-specific validation, lists and deletes", async () => {
+    const created = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "query_anom_by_lot",
+      name: "按批次查异常",
+      executor: "sql",
+      config: { sql: "SELECT * FROM v_anom_wafer WHERE lot = {lot}" },
+      risk: "LOW",
+      discovery: "auto",
+      intent: "查询异常,批次明细",
+      params: [{ name: "lot", type: "string", required: true }],
+      description: "按批次标识查询异常明细。",
+    });
+    expect(created.status).toBe(200);
+    const action = bodyOf(created).data as { id: string; entity: string; params_json: string };
+    expect(action.entity).toBe("AnomWafer");
+    expect(JSON.parse(action.params_json)).toEqual([{ name: "lot", type: "string", required: true }]);
+
+    const duplicate = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "query_anom_by_lot",
+      name: "重复",
+      executor: "sql",
+      config: { sql: "SELECT * FROM v_anom_wafer" },
+    });
+    expect(duplicate.status).toBe(409);
+
+    const nonSelect = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "bad_sql",
+      name: "非只读",
+      executor: "sql",
+      config: { sql: "DELETE FROM v_anom_wafer" },
+    });
+    expect(nonSelect.status).toBe(400);
+    expect(bodyOf(nonSelect).error?.message).toContain("SELECT");
+
+    const badApi = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "bad_api",
+      name: "外置写缺白名单",
+      executor: "api",
+      config: { method: "POST", path: "http://crm.example.com/freeze" },
+    });
+    expect(badApi.status).toBe(400);
+
+    const badParam = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "bad_param",
+      name: "参数名非法",
+      params: [{ name: "a b", type: "string" }],
+    });
+    expect(badParam.status).toBe(400);
+
+    const context = await call("GET", ["context"], bodyRequest(""));
+    const actions = (bodyOf(context).data as { actions: Array<{ code: string }> }).actions;
+    expect(actions.find((a) => a.code === "query_anom_by_lot")).toBeTruthy();
+
+    const deleted = await delJson(["actions", action.id]);
+    expect(deleted.status).toBe(200);
+  });
+});
+
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {
     const response = await call("GET", ["nope"], bodyRequest(""));

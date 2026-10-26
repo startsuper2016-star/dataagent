@@ -125,6 +125,10 @@ export const handleOntologyRequest = async (
         return await handleEntitiesRoute(request, method, path.slice(1), context);
       case "relations":
         return await handleRelationsRoute(request, method, path.slice(1), context);
+      case "rules":
+        return await handleRulesRoute(request, method, path.slice(1), context);
+      case "actions":
+        return await handleActionsRoute(request, method, path.slice(1), context);
       case "datasource":
         return await handleDatasourceTables(method, path.slice(1), context);
       case "versions":
@@ -648,6 +652,399 @@ const handleRelationDelete = (relationId: string, db: DatabaseSync): ConfigApiRe
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知关系: ${relationId}`);
   }
   return ok({ deleted: relationId });
+};
+
+// --- 逻辑规则（ont_rules）与行为（ont_actions）：原型化建模资源 -------------------------
+
+const RULE_TYPES = ["inference", "validation", "logic"];
+const RULE_CARRIERS = ["expression", "sql", "python"];
+const CONDITION_OPS = ["=", "!=", ">", ">=", "<", "<=", "contains", "starts_with", "ends_with", "in"];
+const ACTION_EXECUTORS = ["sql", "api", "notify"];
+const ACTION_RISKS = ["LOW", "MEDIUM", "HIGH"];
+const ACTION_DISCOVERY = ["auto", "confirm"];
+
+/** 条件三元组静态校验：字段必须是作用对象的已登记属性（标识符白名单 + 存在性），op 走枚举，值须标量。 */
+const validatedConditionRows = (
+  db: DatabaseSync,
+  entityId: string,
+  raw: Record<string, unknown>[] | undefined
+): Array<[string, string, string]> => {
+  if (!raw) {
+    return [];
+  }
+  const known = new Set(
+    (db.prepare("SELECT name FROM ont_attributes WHERE entity_id = ?").all(entityId) as { name: string }[]).map(
+      (a) => a.name,
+    ),
+  );
+  return raw.map((row, index) => {
+    const field = stringValue(row.field);
+    const op = stringValue(row.op);
+    const value = row.value;
+    if (!field || !isSafeIdentifier(field) || !known.has(field)) {
+      throw new OntologyHttpError(
+        400,
+        "BAD_REQUEST",
+        `第 ${index + 1} 个条件的字段须为作用对象的已登记属性: ${field ?? ""}`,
+      );
+    }
+    if (!op || !CONDITION_OPS.includes(op)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `第 ${index + 1} 个条件的运算符不合法: ${op ?? ""}`);
+    }
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `第 ${index + 1} 个条件的值必须为标量`);
+    }
+    return [field, op, String(value)];
+  });
+};
+
+/** 规则的 WHEN/THEN 可读表达式（推理/校验）或载体正文（计算逻辑），随 /context 下发给 LLM。 */
+const composeRuleExpr = (rule: {
+  rule_type: string;
+  conditions_json: string | null;
+  conclusion: string | null;
+  carrier: string | null;
+}): string => {
+  if (rule.rule_type === "logic") {
+    return rule.conclusion ?? "";
+  }
+  const conditions = (safeJsonParse(rule.conditions_json ?? "") as Array<[string, string, string]> | undefined) ?? [];
+  const when = conditions.map(([f, op, v]) => `${f} ${op} ${v}`).join(" AND ");
+  return `WHEN ${when || "（无条件）"} THEN ${rule.conclusion ?? ""}`;
+};
+
+const ruleRow = (
+  db: DatabaseSync,
+  id: string,
+): Record<string, unknown> | undefined => {
+  const row = db
+    .prepare(
+      `SELECT r.id, r.entity_id, e.name AS entity, r.name, r.rule_type, r.carrier,
+              r.conditions_json, r.conclusion, r.enabled, r.description,
+              r.created_at, r.updated_at
+       FROM ont_rules r JOIN ont_entities e ON e.id = r.entity_id
+       WHERE r.id = ?`,
+    )
+    .get(id) as Record<string, unknown> | undefined;
+  if (!row) {
+    return undefined;
+  }
+  return { ...row, expr: composeRuleExpr(row as Parameters<typeof composeRuleExpr>[0]) };
+};
+
+/** GET|POST /rules、PUT|DELETE /rules/:id —— 逻辑规则 CRUD（WHEN/THEN 推理、校验与计算逻辑）。 */
+const handleRulesRoute = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  if (rest.length === 0) {
+    if (method === "GET") {
+      // 全量返回（带实体名），按实体过滤由前端本地完成——避免依赖分发链的 query 透传
+      const rows = db
+        .prepare(
+          `SELECT r.id, r.entity_id, e.name AS entity, r.name, r.rule_type, r.carrier, r.conditions_json,
+                  r.conclusion, r.enabled, r.description, r.updated_at
+           FROM ont_rules r JOIN ont_entities e ON e.id = r.entity_id
+           ORDER BY e.name, r.created_at`,
+        )
+        .all()
+        .map((row) => {
+          const record = row as Record<string, unknown>;
+          return { ...record, expr: composeRuleExpr(record as Parameters<typeof composeRuleExpr>[0]) };
+        });
+      return ok({ rules: rows });
+    }
+    requireMethod(method, "POST");
+    return handleRuleCreate(request, db);
+  }
+  const ruleId = rest[0];
+  if (!ruleId) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少规则 ID");
+  }
+  if (rest.length === 1 && method === "PUT") {
+    return handleRuleUpdate(request, ruleId, db);
+  }
+  if (rest.length === 1 && method === "DELETE") {
+    const result = db.prepare("DELETE FROM ont_rules WHERE id = ?").run(ruleId);
+    if (result.changes === 0) {
+      throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知规则: ${ruleId}`);
+    }
+    return ok({ deleted: ruleId });
+  }
+  throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（规则端点支持 GET/POST/PUT/DELETE）: ${method ?? ""}`);
+};
+
+interface RuleInput {
+  entityId: string;
+  name: string;
+  ruleType: string;
+  carrier: string | null;
+  conditionsJson: string;
+  conclusion: string | null;
+  enabled: number;
+  description: string | null;
+}
+
+/** 规则入参统一校验（创建/更新共用）：类型/载体/条件/结论按规则分支约束。 */
+const validatedRuleInput = async (
+  request: IncomingMessage,
+  db: DatabaseSync,
+): Promise<RuleInput> => {
+  const body = await readJsonBody(request);
+  const entityName = stringValue(body.entity);
+  const name = stringValue(body.name);
+  if (!entityName || !name) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 entity/name");
+  }
+  if (!isSafeIdentifier(name)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `规则名含非法字符（仅字母/数字/下划线/中文）: ${name}`);
+  }
+  const entityId = requireEntityId(db, entityName);
+  const ruleType = stringValue(body.ruleType) ?? "inference";
+  if (!RULE_TYPES.includes(ruleType)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `ruleType 仅支持 ${RULE_TYPES.join("/")}: ${ruleType}`);
+  }
+  let carrier: string | null = stringValue(body.carrier) ?? null;
+  if (carrier && !RULE_CARRIERS.includes(carrier)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `carrier 仅支持 ${RULE_CARRIERS.join("/")}: ${carrier}`);
+  }
+  const conditions = validatedConditionRows(db, entityId, arrayValue(body.conditions));
+  let conclusion = stringValue(body.then) ?? null;
+  if (ruleType === "logic") {
+    if (!carrier) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "计算逻辑规则必须声明载体（expression/sql/python）");
+    }
+    if (!conclusion) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "计算逻辑规则的载体正文不可为空");
+    }
+  } else {
+    carrier = null;
+    if (!conclusion) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "推理/校验规则必须给出 THEN 结论");
+    }
+  }
+  return {
+    entityId,
+    name,
+    ruleType,
+    carrier,
+    conditionsJson: JSON.stringify(conditions),
+    conclusion,
+    enabled: body.enabled === false ? 0 : 1,
+    description: stringValue(body.description) ?? null,
+  };
+};
+
+const handleRuleCreate = async (
+  request: IncomingMessage,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const input = await validatedRuleInput(request, db);
+  if (db.prepare("SELECT 1 FROM ont_rules WHERE entity_id = ? AND name = ?").get(input.entityId, input.name)) {
+    throw new OntologyHttpError(409, "CONFLICT", `同对象下规则已存在: ${input.name}`);
+  }
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO ont_rules (id, entity_id, name, rule_type, carrier, conditions_json, conclusion, enabled, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, input.entityId, input.name, input.ruleType, input.carrier, input.conditionsJson, input.conclusion, input.enabled, input.description, now, now);
+  return ok(ruleRow(db, id));
+};
+
+const handleRuleUpdate = async (
+  request: IncomingMessage,
+  ruleId: string,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const existing = db.prepare("SELECT id FROM ont_rules WHERE id = ?").get(ruleId) as { id: string } | undefined;
+  if (!existing) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知规则: ${ruleId}`);
+  }
+  const input = await validatedRuleInput(request, db);
+  db.prepare(
+    `UPDATE ont_rules SET entity_id = ?, name = ?, rule_type = ?, carrier = ?, conditions_json = ?,
+            conclusion = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`
+  ).run(input.entityId, input.name, input.ruleType, input.carrier, input.conditionsJson, input.conclusion, input.enabled, input.description, new Date().toISOString(), ruleId);
+  return ok(ruleRow(db, ruleId));
+};
+
+const actionRow = (db: DatabaseSync, id: string): Record<string, unknown> | undefined =>
+  db
+    .prepare(
+      `SELECT a.id, a.entity_id, e.name AS entity, a.code, a.name, a.executor, a.config_json,
+              a.risk, a.discovery, a.intent, a.params_json, a.enabled, a.description,
+              a.created_at, a.updated_at
+       FROM ont_actions a JOIN ont_entities e ON e.id = a.entity_id
+       WHERE a.id = ?`,
+    )
+    .get(id) as Record<string, unknown> | undefined;
+
+/** GET|POST /actions、PUT|DELETE /actions/:id —— 行为 CRUD（Agent 可调用的原子工具契约声明）。 */
+const handleActionsRoute = async (
+  request: IncomingMessage,
+  method: string | undefined,
+  rest: string[],
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  if (rest.length === 0) {
+    if (method === "GET") {
+      // 全量返回（带实体名），按实体过滤由前端本地完成
+      const rows = db
+        .prepare(
+          `SELECT a.id, a.entity_id, e.name AS entity, a.code, a.name, a.executor, a.config_json,
+                  a.risk, a.discovery, a.intent, a.params_json, a.enabled, a.description, a.updated_at
+           FROM ont_actions a JOIN ont_entities e ON e.id = a.entity_id
+           ORDER BY e.name, a.created_at`,
+        )
+        .all();
+      return ok({ actions: rows });
+    }
+    requireMethod(method, "POST");
+    return handleActionCreate(request, db);
+  }
+  const actionId = rest[0];
+  if (!actionId) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少行为 ID");
+  }
+  if (rest.length === 1 && method === "PUT") {
+    return handleActionUpdate(request, actionId, db);
+  }
+  if (rest.length === 1 && method === "DELETE") {
+    const result = db.prepare("DELETE FROM ont_actions WHERE id = ?").run(actionId);
+    if (result.changes === 0) {
+      throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知行为: ${actionId}`);
+    }
+    return ok({ deleted: actionId });
+  }
+  throw new OntologyHttpError(405, "BAD_REQUEST", `Method not allowed（行为端点支持 GET/POST/PUT/DELETE）: ${method ?? ""}`);
+};
+
+interface ActionInput {
+  entityId: string;
+  code: string;
+  name: string;
+  executor: string;
+  configJson: string;
+  risk: string;
+  discovery: string;
+  intent: string | null;
+  paramsJson: string;
+  enabled: number;
+  description: string | null;
+}
+
+/** 行为入参统一校验：执行器枚举 + 按执行器校验配置（sql 只读、api 白名单域、notify 模板）。 */
+const validatedActionInput = async (
+  request: IncomingMessage,
+  db: DatabaseSync
+): Promise<ActionInput> => {
+  const body = await readJsonBody(request);
+  const entityName = stringValue(body.entity);
+  const code = stringValue(body.code);
+  const name = stringValue(body.name);
+  if (!entityName || !code || !name) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 entity/code/name");
+  }
+  if (!isSafeIdentifier(code)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `行为标识含非法字符（仅字母/数字/下划线/中文）: ${code}`);
+  }
+  const entityId = requireEntityId(db, entityName);
+  const executor = stringValue(body.executor) ?? "sql";
+  if (!ACTION_EXECUTORS.includes(executor)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `executor 仅支持 ${ACTION_EXECUTORS.join("/")}: ${executor}`);
+  }
+  const risk = stringValue(body.risk) ?? "LOW";
+  if (!ACTION_RISKS.includes(risk)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `risk 仅支持 ${ACTION_RISKS.join("/")}: ${risk}`);
+  }
+  const discovery = stringValue(body.discovery) ?? "confirm";
+  if (!ACTION_DISCOVERY.includes(discovery)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `discovery 仅支持 ${ACTION_DISCOVERY.join("/")}: ${discovery}`);
+  }
+  const config = recordValue(body.config) ?? {};
+  if (executor === "sql") {
+    const sql = typeof config.sql === "string" ? config.sql.trim() : "";
+    if (!/^select\b/i.test(sql)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "只读查询行为必须以 SELECT 开头");
+    }
+  }
+  if (executor === "api") {
+    const path = typeof config.path === "string" ? config.path.trim() : "";
+    if (!/^https:\/\//i.test(path)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "外置写行为必须使用 https 地址");
+    }
+    const hosts = typeof config.hosts === "string" ? config.hosts.trim() : "";
+    if (!hosts) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "外置写行为必须声明地址白名单");
+    }
+  }
+  if (executor === "notify" && !(typeof config.subject === "string" && config.subject.trim())) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "通知行为必须提供主题模板");
+  }
+  const params = arrayValue(body.params) ?? [];
+  const paramRows = params.map((p, index) => {
+    const paramName = stringValue(p.name);
+    if (!paramName || !isSafeIdentifier(paramName)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `第 ${index + 1} 个参数缺少合法 name`);
+    }
+    return {
+      name: paramName,
+      type: stringValue(p.type) ?? "string",
+      required: p.required === true,
+    };
+  });
+  return {
+    entityId,
+    code,
+    name,
+    executor,
+    configJson: JSON.stringify(config),
+    risk,
+    discovery,
+    intent: stringValue(body.intent) ?? null,
+    paramsJson: JSON.stringify(paramRows),
+    enabled: body.enabled === false ? 0 : 1,
+    description: stringValue(body.description) ?? null,
+  };
+};
+
+const handleActionCreate = async (
+  request: IncomingMessage,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const input = await validatedActionInput(request, db);
+  if (db.prepare("SELECT 1 FROM ont_actions WHERE entity_id = ? AND code = ?").get(input.entityId, input.code)) {
+    throw new OntologyHttpError(409, "CONFLICT", `同对象下行为已存在: ${input.code}`);
+  }
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO ont_actions (id, entity_id, code, name, executor, config_json, risk, discovery, intent, params_json, enabled, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, input.entityId, input.code, input.name, input.executor, input.configJson, input.risk, input.discovery, input.intent, input.paramsJson, input.enabled, input.description, now, now);
+  return ok(actionRow(db, id));
+};
+
+const handleActionUpdate = async (
+  request: IncomingMessage,
+  actionId: string,
+  db: DatabaseSync
+): Promise<ConfigApiResponse> => {
+  const existing = db.prepare("SELECT id FROM ont_actions WHERE id = ?").get(actionId) as { id: string } | undefined;
+  if (!existing) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知行为: ${actionId}`);
+  }
+  const input = await validatedActionInput(request, db);
+  db.prepare(
+    `UPDATE ont_actions SET entity_id = ?, code = ?, name = ?, executor = ?, config_json = ?, risk = ?,
+            discovery = ?, intent = ?, params_json = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`
+  ).run(input.entityId, input.code, input.name, input.executor, input.configJson, input.risk, input.discovery, input.intent, input.paramsJson, input.enabled, input.description, new Date().toISOString(), actionId);
+  return ok(actionRow(db, actionId));
 };
 
 /** GET /datasource/tables —— SPC 数据源物理表/视图 + 列 + 首行样例（映射编辑器左栏）。 */
@@ -1227,18 +1624,39 @@ const handleContext = (method: string | undefined, db: DatabaseSync): ConfigApiR
     .all();
   const functions = db
     .prepare(
-      `SELECT callable_name, description, input_schema_json
-       FROM ont_functions WHERE status = 'active' ORDER BY callable_name`
+      `SELECT f.callable_name, f.description, f.input_schema_json, e.name AS entity
+       FROM ont_functions f LEFT JOIN ont_entities e ON e.id = f.entity_id
+       WHERE f.status = 'active' ORDER BY f.callable_name`
     )
     .all()
     .map((row: Record<string, unknown>) => ({
       callable_name: row.callable_name,
       description: row.description,
+      entity: row.entity ?? null,
       input_schema: typeof row.input_schema_json === "string"
         ? JSON.parse(row.input_schema_json as string)
         : row.input_schema_json,
     }));
-  return ok({ bindings, relations, functions });
+  // 规则/动作随上下文下发：启用的条目供 Agent 在问答/工具发现时引用
+  const rules = (
+    db
+      .prepare(
+        `SELECT r.id, e.name AS entity, r.name, r.rule_type, r.carrier, r.conditions_json,
+                r.conclusion, r.description
+         FROM ont_rules r JOIN ont_entities e ON e.id = r.entity_id
+         WHERE r.enabled = 1 ORDER BY e.name, r.name`
+      )
+      .all() as Array<Record<string, unknown>>
+  ).map((row) => ({ ...row, expr: composeRuleExpr(row as Parameters<typeof composeRuleExpr>[0]) }));
+  const actions = db
+    .prepare(
+      `SELECT a.id, e.name AS entity, a.code, a.name, a.executor, a.config_json,
+              a.risk, a.discovery, a.intent, a.params_json, a.description
+       FROM ont_actions a JOIN ont_entities e ON e.id = a.entity_id
+       WHERE a.enabled = 1 ORDER BY e.name, a.code`
+    )
+    .all();
+  return ok({ bindings, relations, functions, rules, actions });
 };
 
 // --- 数据连接与元数据读取 ----------------------------------------------------------

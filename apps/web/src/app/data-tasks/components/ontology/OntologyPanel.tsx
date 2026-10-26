@@ -60,6 +60,34 @@ type FunctionRow = {
   input_schema: unknown;
 };
 
+type RuleRow = {
+  id: string;
+  entity: string;
+  name: string;
+  rule_type: string;
+  carrier: string | null;
+  conditions_json: string | null;
+  conclusion: string | null;
+  enabled: number;
+  description: string | null;
+  expr?: string;
+};
+
+type ActionRow = {
+  id: string;
+  entity: string;
+  code: string;
+  name: string;
+  executor: string;
+  config_json: string | null;
+  risk: string;
+  discovery: string;
+  intent: string | null;
+  params_json: string | null;
+  enabled: number;
+  description: string | null;
+};
+
 type VersionRow = {
   id: string;
   version_number: number;
@@ -77,7 +105,7 @@ type CheckRow = { entity: string; ok: boolean; reason?: string };
 type DsTable = { name: string; kind: string; columns: Array<{ name: string; type: string }> };
 
 type TabKey = "manage" | "canvas" | "validation";
-type DetailTab = "detail" | "relations" | "mapping" | "logic";
+type DetailTab = "detail" | "relations" | "mapping" | "rules" | "actions" | "logic";
 type TrayTab = "resource" | "path";
 
 const emptyAttrDraft = (): AttrDraft => ({ name: "", displayName: "", type: "string", required: false });
@@ -117,6 +145,8 @@ export function OntologyPanel({ onBack }: { onBack: () => void }) {
   const [functions, setFunctions] = useState<FunctionRow[]>([]);
   const [versions, setVersions] = useState<VersionRow[]>([]);
   const [dsTables, setDsTables] = useState<DsTable[]>([]);
+  const [rules, setRules] = useState<RuleRow[]>([]);
+  const [actions, setActions] = useState<ActionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -139,8 +169,10 @@ export function OntologyPanel({ onBack }: { onBack: () => void }) {
         ontologyFetch("/api/v1/ontology/context").then(unwrap),
         ontologyFetch("/api/v1/ontology/versions").then(unwrap),
         ontologyFetch("/api/v1/ontology/datasource/tables").then(unwrap),
+        ontologyFetch("/api/v1/ontology/rules").then(unwrap),
+        ontologyFetch("/api/v1/ontology/actions").then(unwrap),
       ]);
-      const [ent, ctx, ver, ds] = results;
+      const [ent, ctx, ver, ds, rules, actions] = results;
       if (ent.status === "fulfilled") {
         setEntities((ent.value as { entities: EntityRow[] }).entities);
       }
@@ -154,6 +186,12 @@ export function OntologyPanel({ onBack }: { onBack: () => void }) {
       }
       if (ds.status === "fulfilled") {
         setDsTables((ds.value as { tables: DsTable[] }).tables);
+      }
+      if (rules.status === "fulfilled") {
+        setRules((rules.value as { rules: RuleRow[] }).rules);
+      }
+      if (actions.status === "fulfilled") {
+        setActions((actions.value as { actions: ActionRow[] }).actions);
       }
       if (reportErrors) {
         for (const r of results) {
@@ -271,6 +309,8 @@ export function OntologyPanel({ onBack }: { onBack: () => void }) {
             relations={relations}
             functions={functions}
             dsTables={dsTables}
+            rules={rules}
+            actions={actions}
             reload={reload}
             notify={notify}
           />
@@ -312,6 +352,8 @@ function ManageView({
   relations,
   functions,
   dsTables,
+  rules,
+  actions,
   reload,
   notify,
 }: {
@@ -319,6 +361,8 @@ function ManageView({
   relations: RelationRow[];
   functions: FunctionRow[];
   dsTables: DsTable[];
+  rules: RuleRow[];
+  actions: ActionRow[];
   reload: () => Promise<void>;
   notify: (kind: "ok" | "err", text: string) => void;
 }) {
@@ -337,6 +381,8 @@ function ManageView({
   const entityRelations = current
     ? relations.filter((r) => r.from_entity === current.name || r.to_entity === current.name)
     : [];
+  const entityRuleCount = current ? rules.filter((r) => r.entity === current.name).length : 0;
+  const entityActionCount = current ? actions.filter((a) => a.entity === current.name).length : 0;
 
   const select = (name: string) => {
     setSelected(name);
@@ -421,7 +467,9 @@ function ManageView({
                   ["detail", "本体详情"],
                   ["relations", `本体关系${entityRelations.length ? ` (${entityRelations.length})` : ""}`],
                   ["mapping", "本体映射"],
-                  ["logic", "逻辑"],
+                  ["rules", `逻辑规则${entityRuleCount ? ` (${entityRuleCount})` : ""}`],
+                  ["actions", `行为${entityActionCount ? ` (${entityActionCount})` : ""}`],
+                  ["logic", "函数"],
                 ] as Array<[DetailTab, string]>
               ).map(([key, label]) => (
                 <button
@@ -453,6 +501,22 @@ function ManageView({
               ) : null}
               {detailTab === "mapping" ? (
                 <EntityMapping entity={current} dsTables={dsTables} reload={reload} notify={notify} />
+              ) : null}
+              {detailTab === "rules" ? (
+                <EntityRules
+                  entity={current}
+                  rules={rules.filter((r) => r.entity === current.name)}
+                  reload={reload}
+                  notify={notify}
+                />
+              ) : null}
+              {detailTab === "actions" ? (
+                <EntityActions
+                  entity={current}
+                  actions={actions.filter((a) => a.entity === current.name)}
+                  reload={reload}
+                  notify={notify}
+                />
               ) : null}
               {detailTab === "logic" ? <EntityLogic functions={functions} /> : null}
             </div>
@@ -1053,6 +1117,650 @@ function EntityMapping({
         >
           保存并审批
         </button>
+      </div>
+    </div>
+  );
+}
+
+type ConditionDraft = { field: string; op: string; value: string };
+
+function EntityRules({
+  entity,
+  rules,
+  reload,
+  notify,
+}: {
+  entity: EntityRow;
+  rules: RuleRow[];
+  reload: () => Promise<void>;
+  notify: (kind: "ok" | "err", text: string) => void;
+}) {
+  const [editing, setEditing] = useState<RuleRow | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [ruleType, setRuleType] = useState("inference");
+  const [carrier, setCarrier] = useState("expression");
+  const [conditions, setConditions] = useState<ConditionDraft[]>([]);
+  const [thenText, setThenText] = useState("");
+  const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const openCreate = () => {
+    setEditing(null);
+    setName("");
+    setRuleType("inference");
+    setCarrier("expression");
+    setConditions([]);
+    setThenText("");
+    setEnabled(true);
+    setCreating(true);
+  };
+
+  const openEdit = (rule: RuleRow) => {
+    setCreating(true);
+    setEditing(rule);
+    setName(rule.name);
+    setRuleType(rule.rule_type);
+    setCarrier(rule.carrier ?? "expression");
+    let parsed: ConditionDraft[] = [];
+    try {
+      const raw: unknown = JSON.parse(rule.conditions_json ?? "[]");
+      if (Array.isArray(raw)) {
+        parsed = (raw as Array<[string, string, string]>).map(([field, op, value]) => ({ field, op, value }));
+      }
+    } catch {
+      parsed = [];
+    }
+    setConditions(parsed);
+    setThenText(rule.conclusion ?? "");
+    setEnabled(rule.enabled === 1);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const body = {
+        entity: entity.name,
+        name,
+        ruleType,
+        ...(ruleType === "logic" ? { carrier } : {}),
+        conditions: conditions.filter((c) => c.field.trim()),
+        then: thenText || undefined,
+        enabled,
+      };
+      const res = await ontologyFetch(
+        editing ? `/api/v1/ontology/rules/${encodeURIComponent(editing.id)}` : "/api/v1/ontology/rules",
+        {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        notify("err", json.error?.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      setCreating(false);
+      setEditing(null);
+      await reload();
+      notify("ok", editing ? `规则 ${name} 已更新` : `规则 ${name} 已创建`);
+    } catch (error) {
+      notify("err", String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (rule: RuleRow) => {
+    if (!window.confirm(`删除规则 ${rule.name}？`)) return;
+    try {
+      const res = await ontologyFetch(`/api/v1/ontology/rules/${encodeURIComponent(rule.id)}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        notify("err", json.error?.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      await reload();
+      notify("ok", `规则 ${rule.name} 已删除`);
+    } catch (error) {
+      notify("err", String(error));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-light">
+          业务判断沉淀为推理（WHEN/THEN）、校验或计算逻辑，问答与校验按声明执行而非模型临场发挥。
+        </p>
+        <button
+          type="button"
+          className={btnGhost}
+          onClick={() => (creating && !editing ? setCreating(false) : openCreate())}
+        >
+          {creating && !editing ? "收起表单" : "新建规则"}
+        </button>
+      </div>
+
+      {creating ? (
+        <div className="rounded-lg border border-border bg-surface-subtle p-3">
+          <div className="grid grid-cols-[1fr_180px] gap-3">
+            <label className="text-[11px] text-muted-light">
+              规则名（英文标识）*
+              <input className={`mt-1 ${inputClass}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="如 vip_customer" />
+            </label>
+            <label className="text-[11px] text-muted-light">
+              规则分支
+              <select className={`mt-1 ${inputClass}`} value={ruleType} onChange={(e) => setRuleType(e.target.value)}>
+                <option value="inference">推理</option>
+                <option value="validation">校验</option>
+                <option value="logic">计算逻辑</option>
+              </select>
+            </label>
+          </div>
+
+          {ruleType === "logic" ? (
+            <div className="mt-3 grid grid-cols-[160px_minmax(0,1fr)] gap-3">
+              <label className="text-[11px] text-muted-light">
+                逻辑载体 *
+                <select className={`mt-1 ${inputClass}`} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+                  <option value="expression">表达式</option>
+                  <option value="sql">SQL</option>
+                  <option value="python">Python</option>
+                </select>
+              </label>
+              <label className="text-[11px] text-muted-light">
+                载体正文 *
+                <textarea
+                  className="mt-1 h-20 w-full rounded-lg border border-border bg-surface p-2 font-mono text-xs"
+                  value={thenText}
+                  onChange={(e) => setThenText(e.target.value)}
+                  placeholder="表达式 / SQL / Python"
+                />
+              </label>
+            </div>
+          ) : (
+            <>
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between text-[11px] text-muted-light">
+                  <span>WHEN 条件（多行按 AND 连接，字段来自作用对象属性）</span>
+                  <button
+                    type="button"
+                    className="rounded border border-border px-2 py-0.5 hover:bg-surface"
+                    onClick={() => setConditions((rows) => [...rows, { field: "", op: "=", value: "" }])}
+                  >
+                    且条件（AND）
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {conditions.map((c, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <select
+                        className={`w-52 ${inputClass}`}
+                        value={c.field}
+                        onChange={(e) => setConditions((rows) => rows.map((r, j) => (j === i ? { ...r, field: e.target.value } : r)))}
+                      >
+                        <option value="">选择属性</option>
+                        {entity.attributes.map((a) => (
+                          <option key={a.id} value={a.name}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        className={`w-32 ${inputClass}`}
+                        value={c.op}
+                        onChange={(e) => setConditions((rows) => rows.map((r, j) => (j === i ? { ...r, op: e.target.value } : r)))}
+                      >
+                        {["=", "!=", ">", ">=", "<", "<=", "contains", "starts_with", "ends_with", "in"].map((op) => (
+                          <option key={op} value={op}>
+                            {op}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className={`flex-1 ${inputClass}`}
+                        value={c.value}
+                        onChange={(e) => setConditions((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
+                        placeholder="值"
+                      />
+                      <button
+                        type="button"
+                        className="text-xs text-rose-500 hover:underline"
+                        onClick={() => setConditions((rows) => rows.filter((_, j) => j !== i))}
+                      >
+                        移除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <label className="mt-3 block text-[11px] text-muted-light">
+                THEN 结论 *
+                <input className={`mt-1 ${inputClass}`} value={thenText} onChange={(e) => setThenText(e.target.value)} placeholder="如 标记为 VIP 客户 / 判定订单金额异常" />
+              </label>
+            </>
+          )}
+
+          <div className="mt-3 flex items-center gap-3">
+            <label className="flex items-center gap-1 text-xs text-muted">
+              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+              启用规则
+            </label>
+            <span className="flex-1" />
+            <button type="button" className={btnGhost} onClick={() => { setCreating(false); setEditing(null); }}>
+              取消
+            </button>
+            <button type="button" className={btnPrimary} disabled={saving || !name.trim()} onClick={save}>
+              {saving ? "保存中…" : editing ? "保存修改" : "创建规则"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-lg border border-border">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-border bg-surface-subtle text-[11px] uppercase text-muted-light">
+              <th className="px-3 py-2 font-medium">规则名</th>
+              <th className="px-3 py-2 font-medium">分支</th>
+              <th className="px-3 py-2 font-medium">表达式</th>
+              <th className="px-3 py-2 font-medium">启用</th>
+              <th className="px-3 py-2 font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {rules.map((r) => (
+              <tr key={r.id} className="border-b border-border last:border-b-0">
+                <td className="px-3 py-2 font-mono text-[13px] font-medium text-foreground">{r.name}</td>
+                <td className="px-3 py-2 text-muted">
+                  {{ inference: "推理", validation: "校验", logic: "计算逻辑" }[r.rule_type] ?? r.rule_type}
+                </td>
+                <td className="max-w-md truncate px-3 py-2 font-mono text-xs text-muted">{r.expr ?? "—"}</td>
+                <td className="px-3 py-2">{r.enabled === 1 ? <span className="text-emerald-600">✓</span> : <span className="text-muted-light">停用</span>}</td>
+                <td className="px-3 py-2 text-right">
+                  <button type="button" className="mr-3 text-xs text-blue-600 hover:underline" onClick={() => openEdit(r)}>
+                    编辑
+                  </button>
+                  <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => remove(r)}>
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {rules.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-muted-light">
+                  暂无规则
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function EntityActions({
+  entity,
+  actions,
+  reload,
+  notify,
+}: {
+  entity: EntityRow;
+  actions: ActionRow[];
+  reload: () => Promise<void>;
+  notify: (kind: "ok" | "err", text: string) => void;
+}) {
+  const [editing, setEditing] = useState<ActionRow | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [executor, setExecutor] = useState("sql");
+  const [sql, setSql] = useState("");
+  const [method, setMethod] = useState("POST");
+  const [apiPath, setApiPath] = useState("");
+  const [hosts, setHosts] = useState("");
+  const [subject, setSubject] = useState("");
+  const [risk, setRisk] = useState("LOW");
+  const [discovery, setDiscovery] = useState("confirm");
+  const [intent, setIntent] = useState("");
+  const [params, setParams] = useState<Array<{ name: string; type: string; required: boolean }>>([]);
+  const [description, setDescription] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const openCreate = () => {
+    setEditing(null);
+    setCode("");
+    setName("");
+    setExecutor("sql");
+    setSql("");
+    setMethod("POST");
+    setApiPath("");
+    setHosts("");
+    setSubject("");
+    setRisk("LOW");
+    setDiscovery("confirm");
+    setIntent("");
+    setParams([]);
+    setDescription("");
+    setCreating(true);
+  };
+
+  const openEdit = (action: ActionRow) => {
+    setCreating(true);
+    setEditing(action);
+    setCode(action.code);
+    setName(action.name);
+    setExecutor(action.executor);
+    let config: Record<string, string> = {};
+    try {
+      config = JSON.parse(action.config_json ?? "{}") as Record<string, string>;
+    } catch {
+      config = {};
+    }
+    setSql(config.sql ?? "");
+    setMethod(config.method ?? "POST");
+    setApiPath(config.path ?? "");
+    setHosts(config.hosts ?? "");
+    setSubject(config.subject ?? "");
+    setRisk(action.risk);
+    setDiscovery(action.discovery);
+    setIntent(action.intent ?? "");
+    let parsedParams: Array<{ name: string; type: string; required: boolean }> = [];
+    try {
+      const raw: unknown = JSON.parse(action.params_json ?? "[]");
+      if (Array.isArray(raw)) parsedParams = raw as Array<{ name: string; type: string; required: boolean }>;
+    } catch {
+      parsedParams = [];
+    }
+    setParams(parsedParams);
+    setDescription(action.description ?? "");
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const config =
+        executor === "sql"
+          ? { sql }
+          : executor === "api"
+            ? { method, path: apiPath, hosts }
+            : { subject, body: "" };
+      const res = await ontologyFetch(
+        editing ? `/api/v1/ontology/actions/${encodeURIComponent(editing.id)}` : "/api/v1/ontology/actions",
+        {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entity: entity.name,
+            code,
+            name,
+            executor,
+            config,
+            risk,
+            discovery,
+            intent: intent || undefined,
+            params: params.filter((p) => p.name.trim()),
+            description: description || undefined,
+            enabled: true,
+          }),
+        },
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        notify("err", json.error?.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      setCreating(false);
+      setEditing(null);
+      await reload();
+      notify("ok", editing ? `行为 ${code} 已更新` : `行为 ${code} 已创建`);
+    } catch (error) {
+      notify("err", String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (action: ActionRow) => {
+    if (!window.confirm(`删除行为 ${action.code}？`)) return;
+    try {
+      const res = await ontologyFetch(`/api/v1/ontology/actions/${encodeURIComponent(action.id)}`, { method: "DELETE" });
+      const json = await res.json();
+      if (!res.ok) {
+        notify("err", json.error?.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      await reload();
+      notify("ok", `行为 ${action.code} 已删除`);
+    } catch (error) {
+      notify("err", String(error));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-light">
+          行为是智能体可调用的原子工具契约；写操作外置到业务系统（api 执行器必须 https + 白名单域）。
+        </p>
+        <button
+          type="button"
+          className={btnGhost}
+          onClick={() => (creating && !editing ? setCreating(false) : openCreate())}
+        >
+          {creating && !editing ? "收起表单" : "新建行为"}
+        </button>
+      </div>
+
+      {creating ? (
+        <div className="rounded-lg border border-border bg-surface-subtle p-3">
+          <div className="grid grid-cols-3 gap-3">
+            <label className="text-[11px] text-muted-light">
+              名称（英文标识）*
+              <input className={`mt-1 ${inputClass}`} value={code} onChange={(e) => setCode(e.target.value)} placeholder="freeze_customer" />
+            </label>
+            <label className="text-[11px] text-muted-light">
+              中文名 *
+              <input className={`mt-1 ${inputClass}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="冻结客户" />
+            </label>
+            <label className="text-[11px] text-muted-light">
+              执行器
+              <select className={`mt-1 ${inputClass}`} value={executor} onChange={(e) => setExecutor(e.target.value)}>
+                <option value="sql">只读查询</option>
+                <option value="api">外置写</option>
+                <option value="notify">通知邮件</option>
+              </select>
+            </label>
+          </div>
+
+          {executor === "sql" ? (
+            <label className="mt-3 block text-[11px] text-muted-light">
+              SQL（只读 SELECT）*
+              <textarea
+                className="mt-1 h-20 w-full rounded-lg border border-border bg-surface p-2 font-mono text-xs"
+                value={sql}
+                onChange={(e) => setSql(e.target.value)}
+                placeholder="SELECT * FROM table WHERE col = {param}"
+              />
+            </label>
+          ) : null}
+          {executor === "api" ? (
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              <label className="text-[11px] text-muted-light">
+                请求方法
+                <select className={`mt-1 ${inputClass}`} value={method} onChange={(e) => setMethod(e.target.value)}>
+                  {["GET", "POST", "PUT", "DELETE"].map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-[11px] text-muted-light">
+                请求地址（https）*
+                <input className={`mt-1 ${inputClass}`} value={apiPath} onChange={(e) => setApiPath(e.target.value)} placeholder="https://..." />
+              </label>
+              <label className="text-[11px] text-muted-light">
+                地址白名单 *
+                <input className={`mt-1 ${inputClass}`} value={hosts} onChange={(e) => setHosts(e.target.value)} placeholder="crm.example.com" />
+              </label>
+            </div>
+          ) : null}
+          {executor === "notify" ? (
+            <label className="mt-3 block text-[11px] text-muted-light">
+              主题模板 *
+              <input className={`mt-1 ${inputClass}`} value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="商品质量告警：{product_id}" />
+            </label>
+          ) : null}
+
+          <div className="mt-3 grid grid-cols-4 items-end gap-3">
+            <label className="text-[11px] text-muted-light">
+              风险等级
+              <select className={`mt-1 ${inputClass}`} value={risk} onChange={(e) => setRisk(e.target.value)}>
+                {["LOW", "MEDIUM", "HIGH"].map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] text-muted-light">
+              发现模式
+              <select className={`mt-1 ${inputClass}`} value={discovery} onChange={(e) => setDiscovery(e.target.value)}>
+                <option value="auto">可自动执行</option>
+                <option value="confirm">需人工确认</option>
+              </select>
+            </label>
+            <label className="col-span-2 text-[11px] text-muted-light">
+              意图标签（逗号分隔，供 Agent 匹配发现）
+              <input className={`mt-1 ${inputClass}`} value={intent} onChange={(e) => setIntent(e.target.value)} placeholder="查询订单,订单明细" />
+            </label>
+          </div>
+
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between text-[11px] text-muted-light">
+              <span>参数契约</span>
+              <button
+                type="button"
+                className="rounded border border-border px-2 py-0.5 hover:bg-surface"
+                onClick={() => setParams((rows) => [...rows, { name: "", type: "string", required: true }])}
+              >
+                添加参数
+              </button>
+            </div>
+            <div className="space-y-2">
+              {params.map((p, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    className={`w-48 ${inputClass}`}
+                    value={p.name}
+                    onChange={(e) => setParams((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
+                    placeholder="参数名"
+                  />
+                  <select
+                    className={`w-28 ${inputClass}`}
+                    value={p.type}
+                    onChange={(e) => setParams((rows) => rows.map((r, j) => (j === i ? { ...r, type: e.target.value } : r)))}
+                  >
+                    {["string", "number", "boolean"].map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1 text-xs text-muted">
+                    <input
+                      type="checkbox"
+                      checked={p.required}
+                      onChange={(e) => setParams((rows) => rows.map((r, j) => (j === i ? { ...r, required: e.target.checked } : r)))}
+                    />
+                    必填
+                  </label>
+                  <button
+                    type="button"
+                    className="text-xs text-rose-500 hover:underline"
+                    onClick={() => setParams((rows) => rows.filter((_, j) => j !== i))}
+                  >
+                    移除
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <label className="mt-3 block text-[11px] text-muted-light">
+            描述
+            <input className={`mt-1 ${inputClass}`} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="可选" />
+          </label>
+
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" className={btnGhost} onClick={() => { setCreating(false); setEditing(null); }}>
+              取消
+            </button>
+            <button type="button" className={btnPrimary} disabled={saving || !code.trim() || !name.trim()} onClick={save}>
+              {saving ? "保存中…" : editing ? "保存修改" : "创建行为"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="overflow-hidden rounded-lg border border-border">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-border bg-surface-subtle text-[11px] uppercase text-muted-light">
+              <th className="px-3 py-2 font-medium">标识</th>
+              <th className="px-3 py-2 font-medium">中文名</th>
+              <th className="px-3 py-2 font-medium">执行器</th>
+              <th className="px-3 py-2 font-medium">风险</th>
+              <th className="px-3 py-2 font-medium">发现</th>
+              <th className="px-3 py-2 font-medium">意图</th>
+              <th className="px-3 py-2 font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {actions.map((a) => (
+              <tr key={a.id} className="border-b border-border last:border-b-0">
+                <td className="px-3 py-2 font-mono text-[13px] font-medium text-foreground">{a.code}</td>
+                <td className="px-3 py-2 text-foreground">{a.name}</td>
+                <td className="px-3 py-2 text-muted">{{ sql: "只读查询", api: "外置写", notify: "通知" }[a.executor] ?? a.executor}</td>
+                <td className="px-3 py-2">
+                  <span
+                    className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                      a.risk === "HIGH"
+                        ? "border-rose-200 bg-rose-50 text-rose-600"
+                        : a.risk === "MEDIUM"
+                          ? "border-amber-200 bg-amber-50 text-amber-700"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    {a.risk}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-muted">{a.discovery === "auto" ? "自动" : "人工确认"}</td>
+                <td className="px-3 py-2 text-muted">{a.intent ?? "—"}</td>
+                <td className="px-3 py-2 text-right">
+                  <button type="button" className="mr-3 text-xs text-blue-600 hover:underline" onClick={() => openEdit(a)}>
+                    编辑
+                  </button>
+                  <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => remove(a)}>
+                    删除
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {actions.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-3 py-6 text-center text-muted-light">
+                  暂无行为
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </div>
     </div>
   );
