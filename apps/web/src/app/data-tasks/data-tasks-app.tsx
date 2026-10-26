@@ -1228,6 +1228,7 @@ function DataTaskWorkspace({
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
     setDataLinkPanelOpen(false);
+    setOntologyPanelOpen(false);
     if (activeSessionId) {
       setRightPanelDismissedSessions((current) => {
         if (!current.has(activeSessionId)) return current;
@@ -1292,12 +1293,14 @@ function DataTaskWorkspace({
   const openConfigPanel = useCallback((panel: WorkspaceConfigPanelKey) => {
     setWorkspaceFilesPanelOpen(false);
     setDataLinkPanelOpen(false);
+    setOntologyPanelOpen(false);
     setConfigPanel((current) => (current === panel ? null : panel));
   }, []);
 
   const openWorkspaceFilesPanel = useCallback(() => {
     setConfigPanel(null);
     setDataLinkPanelOpen(false);
+    setOntologyPanelOpen(false);
     setWorkspaceFilesPanelOpen((open) => !open);
   }, []);
 
@@ -1308,6 +1311,7 @@ function DataTaskWorkspace({
   const openDataLinkPanel = useCallback(() => {
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
+    setOntologyPanelOpen(false);
     setDataLinkPanelOpen((open) => !open);
   }, []);
 
@@ -1634,6 +1638,7 @@ function DataTaskWorkspace({
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
     setDataLinkPanelOpen(false);
+    setOntologyPanelOpen(false);
     // A brand-new session starts with the task console closed; it auto-opens on
     // the first question (see applyFirstUserMessageTitle).
     setUserRightPanelOpen(false);
@@ -1687,6 +1692,7 @@ function DataTaskWorkspace({
     setConfigPanel(null);
     setWorkspaceFilesPanelOpen(false);
     setDataLinkPanelOpen(false);
+    setOntologyPanelOpen(false);
     clearDraftPromptRequest();
   }, [clearDraftPromptRequest]);
 
@@ -2164,6 +2170,7 @@ function DataTaskWorkspace({
           setConfigPanel(null);
           setWorkspaceFilesPanelOpen(false);
           setDataLinkPanelOpen(false);
+          setOntologyPanelOpen(false);
           clearDraftPromptRequest();
         }}
         onRenameSession={renameSession}

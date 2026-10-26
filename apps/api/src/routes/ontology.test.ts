@@ -968,6 +968,158 @@ describe("P3-5 designer — rules and actions", () => {
   });
 });
 
+describe("P3-5 review fixes — lifecycle integration", () => {
+  it("cascades rules and actions when deleting a draft entity", async () => {
+    await postJson(["entities"], { name: "Doomed3", attributes: [{ name: "code" }] });
+    await postJson(["rules"], {
+      entity: "Doomed3",
+      name: "doomed_rule",
+      ruleType: "inference",
+      conditions: [{ field: "code", op: "=", value: "X" }],
+      then: "命中",
+    });
+    await postJson(["actions"], {
+      entity: "Doomed3",
+      code: "doomed_action",
+      name: "附带动作",
+      executor: "sql",
+      config: { sql: "SELECT 1" },
+    });
+
+    const deleted = await delJson(["entities", "Doomed3"]);
+    expect(deleted.status).toBe(200);
+
+    const rules = await call("GET", ["rules"], bodyRequest(""));
+    expect((bodyOf(rules).data as { rules: Array<{ name: string }> }).rules.find((r) => r.name === "doomed_rule")).toBeUndefined();
+    const actions = await call("GET", ["actions"], bodyRequest(""));
+    expect((bodyOf(actions).data as { actions: Array<{ code: string }> }).actions.find((a) => a.code === "doomed_action")).toBeUndefined();
+  });
+
+  it("includes rules and actions in the submitted version snapshot", async () => {
+    await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "snap_rule",
+      ruleType: "inference",
+      conditions: [{ field: "chamber_id", op: "=", value: "CH1" }],
+      then: "快照校验",
+    });
+    const version = await postJson(["versions"], { name: "v-snap", entityIds: [EID.wafer] });
+    const versionId = (bodyOf(version).data as { id: string }).id;
+    await call("POST", ["versions", versionId, "submit"], bodyRequest({}));
+
+    const detail = await call("GET", ["versions", versionId], bodyRequest(""));
+    const snapshot = (bodyOf(detail).data as { snapshot: Record<string, Array<Record<string, unknown>>> }).snapshot;
+    expect(snapshot.rules ?? []).toHaveLength(1);
+    expect((snapshot.rules ?? [])[0]).toMatchObject({ name: "snap_rule" });
+    expect(Array.isArray(snapshot.actions)).toBe(true);
+  });
+
+  it("blocks rule PUT renames onto existing names and entity moves", async () => {
+    await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "fix_rule_a",
+      ruleType: "inference",
+      conditions: [{ field: "lot", op: "=", value: "L1" }],
+      then: "A",
+    });
+    const b = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "fix_rule_b",
+      ruleType: "inference",
+      conditions: [{ field: "lot", op: "=", value: "L2" }],
+      then: "B",
+    });
+    const bId = (bodyOf(b).data as { id: string }).id;
+
+    const renamed = await putJson(["rules", bId], {
+      entity: "AnomWafer",
+      name: "fix_rule_a",
+      ruleType: "inference",
+      then: "B",
+    });
+    expect(renamed.status).toBe(409);
+
+    const moved = await putJson(["rules", bId], {
+      entity: "ToolEvent",
+      name: "fix_rule_b",
+      ruleType: "inference",
+      then: "B",
+    });
+    expect(moved.status).toBe(400);
+    expect(bodyOf(moved).error?.message).toContain("所属实体不可修改");
+  });
+
+  it("rejects malformed conditions/params arrays and unsafe action configs", async () => {
+    const badConditions = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "bad_conditions",
+      ruleType: "inference",
+      conditions: { field: "lot" },
+      then: "x",
+    });
+    expect(badConditions.status).toBe(400);
+    expect(bodyOf(badConditions).error?.message).toContain("conditions 必须是对象数组");
+
+    const badParams = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "bad_params",
+      name: "参数非数组",
+      executor: "sql",
+      config: { sql: "SELECT 1" },
+      params: { name: "lot" },
+    });
+    expect(badParams.status).toBe(400);
+    expect(bodyOf(badParams).error?.message).toContain("params 必须是对象数组");
+
+    const multiStatement = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "multi_stmt",
+      name: "多语句",
+      executor: "sql",
+      config: { sql: "SELECT 1; DROP TABLE t" },
+    });
+    expect(multiStatement.status).toBe(400);
+    expect(bodyOf(multiStatement).error?.message).toContain("分号");
+
+    const badType = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "bad_param_type",
+      name: "参数类型越界",
+      executor: "sql",
+      config: { sql: "SELECT 1" },
+      params: [{ name: "lot", type: "object" }],
+    });
+    expect(badType.status).toBe(400);
+    expect(bodyOf(badType).error?.message).toContain("string/number/boolean");
+  });
+
+  it("guards attribute deletion against relation keys and rule conditions", async () => {
+    await postJson(["entities"], { name: "Guarded", attributes: [{ name: "alpha" }, { name: "beta" }] });
+    await postJson(["relations"], {
+      name: "guarded_rel",
+      fromEntity: "Guarded",
+      toEntity: "AnomWafer",
+      sourceField: "alpha",
+      targetField: "lot",
+    });
+    await postJson(["rules"], {
+      entity: "Guarded",
+      name: "guarded_rule",
+      ruleType: "inference",
+      conditions: [{ field: "beta", op: "=", value: "1" }],
+      then: "x",
+    });
+
+    const dropBeta = await putJson(["entities", "Guarded"], { attributes: [{ name: "alpha" }] });
+    expect(dropBeta.status).toBe(400);
+    expect(bodyOf(dropBeta).error?.message).toContain("规则条件");
+
+    const dropAlpha = await putJson(["entities", "Guarded"], { attributes: [{ name: "beta" }] });
+    expect(dropAlpha.status).toBe(400);
+    expect(bodyOf(dropAlpha).error?.message).toContain("关系连接键");
+  });
+});
+
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {
     const response = await call("GET", ["nope"], bodyRequest(""));

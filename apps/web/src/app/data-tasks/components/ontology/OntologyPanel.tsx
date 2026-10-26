@@ -152,6 +152,7 @@ export function OntologyPanel({ onBack }: { onBack: () => void }) {
 
   const notify = useCallback((kind: "ok" | "err", text: string) => {
     setMessage({ kind, text });
+    window.setTimeout(() => setMessage(null), 6000);
   }, []);
 
   const reload = useCallback(
@@ -488,10 +489,11 @@ function ManageView({
 
             <div className="min-h-0 flex-1 p-4">
               {detailTab === "detail" ? (
-                <EntityDetail entity={current} reload={reload} notify={notify} />
+                <EntityDetail key={current.id} entity={current} reload={reload} notify={notify} />
               ) : null}
               {detailTab === "relations" ? (
                 <EntityRelations
+                  key={current.id}
                   entity={current}
                   entities={entities}
                   relations={entityRelations}
@@ -500,10 +502,11 @@ function ManageView({
                 />
               ) : null}
               {detailTab === "mapping" ? (
-                <EntityMapping entity={current} dsTables={dsTables} reload={reload} notify={notify} />
+                <EntityMapping key={current.id} entity={current} dsTables={dsTables} reload={reload} notify={notify} />
               ) : null}
               {detailTab === "rules" ? (
                 <EntityRules
+                  key={current.id}
                   entity={current}
                   rules={rules.filter((r) => r.entity === current.name)}
                   reload={reload}
@@ -512,6 +515,7 @@ function ManageView({
               ) : null}
               {detailTab === "actions" ? (
                 <EntityActions
+                  key={current.id}
                   entity={current}
                   actions={actions.filter((a) => a.entity === current.name)}
                   reload={reload}
@@ -1057,8 +1061,12 @@ function EntityMapping({
           if (item.attribute_id && item.source_column) result[item.attribute_id] = item.source_column;
         }
       } else if (parsed && typeof parsed === "object") {
+        // Record 形态（键=属性名）：解析为 attribute_id，保存才能写回数组形态
+        const byName = new Map(entity.attributes.map((a) => [a.name, a.id]));
         for (const [k, v] of Object.entries(parsed as Record<string, string>)) {
-          result[`name:${k}`] = v;
+          const id = byName.get(k);
+          if (id) result[id] = v;
+          else result[`name:${k}`] = v;
         }
       }
       setMappings(result);
@@ -1070,7 +1078,7 @@ function EntityMapping({
   const columns = dsTables.find((t) => t.name === table)?.columns ?? [];
   const mappedCount = entity.attributes.filter((a) => mappings[a.id] || mappings[`name:${a.name}`]).length;
 
-  const save = async () => {
+  const persist = async (): Promise<boolean> => {
     setSaving(true);
     try {
       const res = await ontologyFetch(`/api/v1/ontology/bindings/${encodeURIComponent(entity.name)}`, {
@@ -1087,18 +1095,26 @@ function EntityMapping({
       const json = await res.json();
       if (!res.ok) {
         notify("err", json.error?.message ?? `HTTP ${res.status}`);
-        return;
+        return false;
       }
       await reload();
-      notify("ok", "绑定已保存（状态打回 draft，需重新审批）");
+      return true;
     } catch (error) {
       notify("err", String(error));
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const approve = async () => {
+  const save = async () => {
+    if (await persist()) {
+      notify("ok", "绑定已保存（状态打回 draft，需重新审批）");
+    }
+  };
+
+  const saveAndApprove = async () => {
+    if (!(await persist())) return;
     setSaving(true);
     try {
       const res = await ontologyFetch(`/api/v1/ontology/bindings/${encodeURIComponent(entity.name)}/approve`, {
@@ -1110,21 +1126,13 @@ function EntityMapping({
         return;
       }
       await reload();
-      notify("ok", "审批通过，绑定已生效");
+      notify("ok", "保存并审批通过，绑定已生效");
     } catch (error) {
       notify("err", String(error));
     } finally {
       setSaving(false);
     }
   };
-
-  if (!entity.binding && !table) {
-    return (
-      <div className="rounded-lg border border-dashed border-border bg-surface-subtle p-4 text-sm text-muted">
-        该对象尚未绑定物理表。选择数据表与 ID 列并保存后，将自动创建 draft 绑定，审批后生效。
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -1208,7 +1216,7 @@ function EntityMapping({
           type="button"
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
           disabled={saving || !table || !idColumn}
-          onClick={approve}
+          onClick={saveAndApprove}
         >
           保存并审批
         </button>
@@ -1524,6 +1532,7 @@ function EntityActions({
   const [intent, setIntent] = useState("");
   const [params, setParams] = useState<Array<{ name: string; type: string; required: boolean }>>([]);
   const [description, setDescription] = useState("");
+  const [actionEnabled, setActionEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const openCreate = () => {
@@ -1541,6 +1550,7 @@ function EntityActions({
     setIntent("");
     setParams([]);
     setDescription("");
+    setActionEnabled(true);
     setCreating(true);
   };
 
@@ -1573,6 +1583,7 @@ function EntityActions({
     }
     setParams(parsedParams);
     setDescription(action.description ?? "");
+    setActionEnabled(action.enabled === 1);
   };
 
   const save = async () => {
@@ -1600,7 +1611,7 @@ function EntityActions({
             intent: intent || undefined,
             params: params.filter((p) => p.name.trim()),
             description: description || undefined,
-            enabled: true,
+            enabled: actionEnabled,
           }),
         },
       );
@@ -1787,10 +1798,16 @@ function EntityActions({
             </div>
           </div>
 
-          <label className="mt-3 block text-[11px] text-muted-light">
-            描述
-            <input className={`mt-1 ${inputClass}`} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="可选" />
-          </label>
+          <div className="mt-3 flex items-center gap-4">
+            <label className="block text-[11px] text-muted-light">
+              描述
+              <input className={`mt-1 ${inputClass}`} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="可选" />
+            </label>
+            <label className="flex items-center gap-1 text-xs text-muted">
+              <input type="checkbox" checked={actionEnabled} onChange={(e) => setActionEnabled(e.target.checked)} />
+              启用行为
+            </label>
+          </div>
 
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" className={btnGhost} onClick={() => { setCreating(false); setEditing(null); }}>
@@ -1989,7 +2006,7 @@ function CanvasView({
             {relations.map((r) => {
               const a = layout.get(r.from_entity);
               const b = layout.get(r.to_entity);
-              if (!a || !b) return null;
+              if (!a || !b || r.from_entity === r.to_entity) return null;
               const mx = (a.x + b.x) / 2;
               const my = (a.y + b.y) / 2;
               const dim = selected && r.from_entity !== selected && r.to_entity !== selected;
@@ -2257,6 +2274,7 @@ function ValidationView({
   const [createOpen, setCreateOpen] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const [promoteJson, setPromoteJson] = useState("");
+  const [promoting, setPromoting] = useState(false);
 
   const runCheck = async (versionId: string) => {
     setBusy(true);
@@ -2298,6 +2316,7 @@ function ValidationView({
   };
 
   const promote = async () => {
+    if (promoting) return;
     let body: unknown;
     try {
       body = JSON.parse(promoteJson);
@@ -2305,6 +2324,7 @@ function ValidationView({
       notify("err", "不是合法 JSON");
       return;
     }
+    setPromoting(true);
     try {
       const res = await ontologyFetch("/api/v1/ontology/promote", {
         method: "POST",
@@ -2316,10 +2336,13 @@ function ValidationView({
         notify("err", json.error?.message ?? `HTTP ${res.status}`);
         return;
       }
+      setPromoteJson("");
       await reload();
       notify("ok", "候选已晋升为 draft，到「本体管理」逐个审批绑定");
     } catch (error) {
       notify("err", String(error));
+    } finally {
+      setPromoting(false);
     }
   };
 
@@ -2353,8 +2376,8 @@ function ValidationView({
             onChange={(e) => setPromoteJson(e.target.value)}
           />
           <div className="mt-2 flex items-center gap-3">
-            <button type="button" className={btnPrimary} onClick={promote}>
-              晋升为 draft
+            <button type="button" className={btnPrimary} disabled={promoting} onClick={promote}>
+              {promoting ? "晋升中…" : "晋升为 draft"}
             </button>
             <span className="text-xs text-muted-light">推断候选转正为 draft 实体/绑定，人工审批后生效（不做自动晋升）</span>
           </div>
@@ -2425,7 +2448,7 @@ function ValidationView({
                 {v.published_at ? `发布于 ${new Date(v.published_at).toLocaleString("zh-CN")}` : v.created_at ? `创建于 ${new Date(v.created_at).toLocaleString("zh-CN")}` : ""}
               </span>
               <span className="flex-1" />
-              <button type="button" className={btnGhost} onClick={() => { setSelectedVersion(v.id); runCheck(v.id); setChecks(null); }}>
+              <button type="button" className={btnGhost} onClick={() => { setSelectedVersion(v.id); setChecks(null); runCheck(v.id); }}>
                 检查
               </button>
               {v.status === "draft" ? (

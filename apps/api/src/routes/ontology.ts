@@ -488,14 +488,36 @@ const handleEntityUpdate = async (
       const deletable = existing.filter((a) => !keepNames.has(a.name));
       if (deletable.length > 0) {
         const referenced = referencedAttributeKeys(db, entityId);
+        // 关系连接键与规则条件同样按属性名引用，删除会孤儿化 traverse 编译与规则表达式
+        const relationKeyNames = new Set(
+          (
+            db
+              .prepare("SELECT source_field, target_field FROM ont_relations WHERE from_entity_id = ? OR to_entity_id = ?")
+              .all(entityId, entityId) as Array<{ source_field: unknown; target_field: unknown }>
+          ).flatMap((r) => [r.source_field, r.target_field])
+        );
+        const ruleConditionNames = new Set(
+          (
+            db.prepare("SELECT conditions_json FROM ont_rules WHERE entity_id = ?").all(entityId) as Array<{
+              conditions_json: string;
+            }>
+          ).flatMap((r) => {
+            const parsed = safeJsonParse(r.conditions_json);
+            return Array.isArray(parsed) ? (parsed as Array<[string]>).map((c) => c[0]) : [];
+          })
+        );
         const blocked = deletable.filter(
-          (a) => referenced.ids.has(a.id) || referenced.names.has(a.name)
+          (a) =>
+            referenced.ids.has(a.id) ||
+            referenced.names.has(a.name) ||
+            relationKeyNames.has(a.name) ||
+            ruleConditionNames.has(a.name)
         );
         if (blocked.length > 0) {
           throw new OntologyHttpError(
             400,
             "BAD_REQUEST",
-            `属性被绑定映射引用，不可删除（先改绑定）: ${blocked.map((a) => a.name).join("、")}`
+            `属性被绑定映射/关系连接键/规则条件引用，不可删除（先改引用方）: ${blocked.map((a) => a.name).join("、")}`
           );
         }
         const deleteAttribute = db.prepare("DELETE FROM ont_attributes WHERE id = ?");
@@ -571,6 +593,8 @@ const handleEntityDelete = (entityName: string, db: DatabaseSync): ConfigApiResp
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare("DELETE FROM ont_relations WHERE from_entity_id = ? OR to_entity_id = ?").run(entity.id, entity.id);
+    db.prepare("DELETE FROM ont_rules WHERE entity_id = ?").run(entity.id);
+    db.prepare("DELETE FROM ont_actions WHERE entity_id = ?").run(entity.id);
     db.prepare("DELETE FROM ont_bindings WHERE entity_id = ?").run(entity.id);
     db.prepare("DELETE FROM ont_attributes WHERE entity_id = ?").run(entity.id);
     db.prepare("DELETE FROM ont_entities WHERE id = ?").run(entity.id);
@@ -613,14 +637,23 @@ const handleRelationUpdate = async (
   const db = context.metadataStore.db;
   const existing = db
     .prepare(
-      `SELECT r.id, r.from_entity_id, r.to_entity_id, ef.name AS from_entity, et.name AS to_entity
+      `SELECT r.id, r.from_entity_id, r.to_entity_id, r.cardinality AS existing_cardinality,
+             r.description AS existing_description, ef.name AS from_entity, et.name AS to_entity
        FROM ont_relations r
        JOIN ont_entities ef ON ef.id = r.from_entity_id
        JOIN ont_entities et ON et.id = r.to_entity_id
        WHERE r.id = ?`
     )
     .get(relationId) as
-    | { id: string; from_entity_id: string; to_entity_id: string; from_entity: string; to_entity: string }
+    | {
+        id: string;
+        from_entity_id: string;
+        to_entity_id: string;
+        existing_cardinality: string;
+        existing_description: string | null;
+        from_entity: string;
+        to_entity: string;
+      }
     | undefined;
   if (!existing) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知关系: ${relationId}`);
@@ -630,7 +663,8 @@ const handleRelationUpdate = async (
   if (!name) {
     throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 name");
   }
-  const cardinality = stringValue(body.cardinality) ?? "1:N";
+  // 省略 cardinality 时保持原值（部分更新不应把 N:N 悄悄改回 1:N）
+  const cardinality = stringValue(body.cardinality) ?? existing.existing_cardinality;
   if (!CARDINALITY_VALUES.includes(cardinality)) {
     throw new OntologyHttpError(400, "BAD_REQUEST", `cardinality 仅支持 ${CARDINALITY_VALUES.join("/")}: ${cardinality}`);
   }
@@ -657,9 +691,10 @@ const handleRelationUpdate = async (
   if (Boolean(source) !== Boolean(target)) {
     throw new OntologyHttpError(400, "BAD_REQUEST", "sourceField 与 targetField 必须同时登记或同时为空");
   }
+  const description = "description" in body ? (stringValue(body.description) ?? null) : existing.existing_description;
   db.prepare(
-    "UPDATE ont_relations SET name = ?, cardinality = ?, source_field = ?, target_field = ?, description = COALESCE(?, description) WHERE id = ?"
-  ).run(name, cardinality, source, target, stringValue(body.description) ?? null, relationId);
+    "UPDATE ont_relations SET name = ?, cardinality = ?, source_field = ?, target_field = ?, description = ? WHERE id = ?"
+  ).run(name, cardinality, source, target, description, relationId);
   return ok({
     id: relationId,
     name,
@@ -668,7 +703,7 @@ const handleRelationUpdate = async (
     cardinality,
     source_field: source,
     target_field: target,
-    description: stringValue(body.description) ?? null,
+    description,
   });
 };
 
@@ -882,6 +917,9 @@ const validatedRuleInput = async (
   if (carrier && !RULE_CARRIERS.includes(carrier)) {
     throw new OntologyHttpError(400, "BAD_REQUEST", `carrier 仅支持 ${RULE_CARRIERS.join("/")}: ${carrier}`);
   }
+  if ("conditions" in body && !arrayValue(body.conditions)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "conditions 必须是对象数组");
+  }
   const conditions = validatedConditionRows(db, entityId, arrayValue(body.conditions));
   let conclusion = stringValue(body.then) ?? null;
   if (ruleType === "logic") {
@@ -931,11 +969,24 @@ const handleRuleUpdate = async (
   ruleId: string,
   db: DatabaseSync
 ): Promise<ConfigApiResponse> => {
-  const existing = db.prepare("SELECT id FROM ont_rules WHERE id = ?").get(ruleId) as { id: string } | undefined;
+  const existing = db
+    .prepare(
+      "SELECT r.id, r.entity_id, e.name AS entity FROM ont_rules r JOIN ont_entities e ON e.id = r.entity_id WHERE r.id = ?"
+    )
+    .get(ruleId) as { id: string; entity_id: string; entity: string } | undefined;
   if (!existing) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知规则: ${ruleId}`);
   }
   const input = await validatedRuleInput(request, db);
+  if (input.entityId !== existing.entity_id) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `规则的所属实体不可修改（当前归属 ${existing.entity}）`);
+  }
+  const duplicate = db
+    .prepare("SELECT 1 FROM ont_rules WHERE entity_id = ? AND name = ? AND id != ?")
+    .get(input.entityId, input.name, ruleId);
+  if (duplicate) {
+    throw new OntologyHttpError(409, "CONFLICT", `同对象下规则已存在: ${input.name}`);
+  }
   db.prepare(
     `UPDATE ont_rules SET entity_id = ?, name = ?, rule_type = ?, carrier = ?, conditions_json = ?,
             conclusion = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`
@@ -1043,6 +1094,9 @@ const validatedActionInput = async (
     if (!/^select\b/i.test(sql)) {
       throw new OntologyHttpError(400, "BAD_REQUEST", "只读查询行为必须以 SELECT 开头");
     }
+    if (/;/.test(sql)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "只读查询不允许包含分号（多语句）");
+    }
   }
   if (executor === "api") {
     const path = typeof config.path === "string" ? config.path.trim() : "";
@@ -1057,15 +1111,22 @@ const validatedActionInput = async (
   if (executor === "notify" && !(typeof config.subject === "string" && config.subject.trim())) {
     throw new OntologyHttpError(400, "BAD_REQUEST", "通知行为必须提供主题模板");
   }
+  if ("params" in body && !arrayValue(body.params)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "params 必须是对象数组");
+  }
   const params = arrayValue(body.params) ?? [];
   const paramRows = params.map((p, index) => {
     const paramName = stringValue(p.name);
     if (!paramName || !isSafeIdentifier(paramName)) {
       throw new OntologyHttpError(400, "BAD_REQUEST", `第 ${index + 1} 个参数缺少合法 name`);
     }
+    const type = stringValue(p.type) ?? "string";
+    if (!["string", "number", "boolean"].includes(type)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `第 ${index + 1} 个参数 type 仅支持 string/number/boolean: ${type}`);
+    }
     return {
       name: paramName,
-      type: stringValue(p.type) ?? "string",
+      type,
       required: p.required === true,
     };
   });
@@ -1106,11 +1167,24 @@ const handleActionUpdate = async (
   actionId: string,
   db: DatabaseSync
 ): Promise<ConfigApiResponse> => {
-  const existing = db.prepare("SELECT id FROM ont_actions WHERE id = ?").get(actionId) as { id: string } | undefined;
+  const existing = db
+    .prepare(
+      "SELECT a.id, a.entity_id, e.name AS entity FROM ont_actions a JOIN ont_entities e ON e.id = a.entity_id WHERE a.id = ?"
+    )
+    .get(actionId) as { id: string; entity_id: string; entity: string } | undefined;
   if (!existing) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知行为: ${actionId}`);
   }
   const input = await validatedActionInput(request, db);
+  if (input.entityId !== existing.entity_id) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `行为的所属实体不可修改（当前归属 ${existing.entity}）`);
+  }
+  const duplicate = db
+    .prepare("SELECT 1 FROM ont_actions WHERE entity_id = ? AND code = ? AND id != ?")
+    .get(input.entityId, input.code, actionId);
+  if (duplicate) {
+    throw new OntologyHttpError(409, "CONFLICT", `同对象下行为已存在: ${input.code}`);
+  }
   db.prepare(
     `UPDATE ont_actions SET entity_id = ?, code = ?, name = ?, executor = ?, config_json = ?, risk = ?,
             discovery = ?, intent = ?, params_json = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`
@@ -1257,7 +1331,14 @@ const handleVersionSubmit = (versionId: string, db: DatabaseSync): ConfigApiResp
       `一致性检查未通过：${failed.map((c) => `${c.entity}: ${c.reason}`).join("；")}（用 check 端点查看明细）`
     );
   }
-  const snapshot: Record<string, unknown[]> = { entities: [], attributes: [], bindings: [], relations: [] };
+  const snapshot: Record<string, unknown[]> = {
+    entities: [],
+    attributes: [],
+    bindings: [],
+    relations: [],
+    rules: [],
+    actions: [],
+  };
   snapshot.entities = db
     .prepare(
       `SELECT * FROM ont_entities WHERE id IN (${entityIds.map(() => "?").join(",")})`
@@ -1279,6 +1360,12 @@ const handleVersionSubmit = (versionId: string, db: DatabaseSync): ConfigApiResp
        AND to_entity_id IN (${entityIds.map(() => "?").join(",")})`
     )
     .all(...entityIds, ...entityIds);
+  snapshot.rules = db
+    .prepare(`SELECT * FROM ont_rules WHERE entity_id IN (${entityIds.map(() => "?").join(",")})`)
+    .all(...entityIds);
+  snapshot.actions = db
+    .prepare(`SELECT * FROM ont_actions WHERE entity_id IN (${entityIds.map(() => "?").join(",")})`)
+    .all(...entityIds);
   db.prepare(
     "UPDATE ont_versions SET status = 'submitted', config_snapshot_json = ?, submitted_at = ? WHERE id = ?"
   ).run(JSON.stringify(snapshot), new Date().toISOString(), versionId);
@@ -1857,6 +1944,10 @@ const ontologyErrorResponse = (error: unknown): ConfigApiResponse => {
   const message = error instanceof Error ? error.message : String(error);
   // resolveBinding：实体存在但无 approved 绑定
   if (message.includes("未绑定活动数据源")) {
+    return errorResult(404, "RESOURCE_NOT_FOUND", message);
+  }
+  // traverse：路径上实体绑定缺失（错误串为「…未绑定数据源…」）
+  if (message.includes("未绑定数据源")) {
     return errorResult(404, "RESOURCE_NOT_FOUND", message);
   }
   // traverse：绑定集内无边可走
