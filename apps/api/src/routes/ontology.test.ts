@@ -806,6 +806,35 @@ describe("P3-4 designer — relations", () => {
     const response = await call("GET", ["relations"], bodyRequest(""));
     expect(response.status).toBe(405);
   });
+
+  it("updates a relation to register connection keys, validating against entity attributes", async () => {
+    // seed: rel-wt AnomWafer -[has_events]-> ToolEvent，已带 chamber_id 键；改键并改基数
+    const updated = await putJson(["relations", "rel-wt"], {
+      name: "has_events",
+      cardinality: "1:N",
+      sourceField: "wafer_id",
+      targetField: "chamber_id",
+    });
+    expect(updated.status).toBe(200);
+    expect(bodyOf(updated).data).toMatchObject({ source_field: "wafer_id", target_field: "chamber_id" });
+
+    // 目标端不存在的属性 → 400
+    const badTarget = await putJson(["relations", "rel-wt"], {
+      name: "has_events",
+      sourceField: "lot",
+      targetField: "no_such_col",
+    });
+    expect(badTarget.status).toBe(400);
+    expect(bodyOf(badTarget).error?.message).toContain("ToolEvent 不存在属性");
+
+    // 只登记一端 → 400
+    const halfKey = await putJson(["relations", "rel-wt"], { name: "has_events", sourceField: "lot" });
+    expect(halfKey.status).toBe(400);
+
+    // 未知关系 404
+    const unknown = await putJson(["relations", "rel-nope"], { name: "x" });
+    expect(unknown.status).toBe(404);
+  });
 });
 
 describe("P3-5 designer — rules and actions", () => {

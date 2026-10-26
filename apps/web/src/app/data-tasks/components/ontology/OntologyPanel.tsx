@@ -772,38 +772,92 @@ function EntityRelations({
   reload: () => Promise<void>;
   notify: (kind: "ok" | "err", text: string) => void;
 }) {
+  const [editingRel, setEditingRel] = useState<RelationRow | null>(null);
+  const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
-  const [to, setTo] = useState("");
+  const [fromName, setFromName] = useState(entity.name);
+  const [toName, setToName] = useState("");
   const [cardinality, setCardinality] = useState("1:N");
   const [sourceField, setSourceField] = useState("");
   const [targetField, setTargetField] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const create = async () => {
+  const attrsOf = (entityName: string) => entities.find((e) => e.name === entityName)?.attributes ?? [];
+  const formOpen = creating || Boolean(editingRel);
+  // 编辑时方向锁定为原关系两端；新建时起点=当前对象
+  const lockDirection = Boolean(editingRel);
+
+  const openCreate = () => {
+    setEditingRel(null);
+    setCreating(true);
+    setName("");
+    setFromName(entity.name);
+    setToName("");
+    setCardinality("1:N");
+    setSourceField("");
+    setTargetField("");
+  };
+
+  const openEdit = (rel: RelationRow) => {
+    setCreating(false);
+    setEditingRel(rel);
+    setName(rel.name);
+    setFromName(rel.from_entity);
+    setToName(rel.to_entity);
+    setCardinality(rel.cardinality);
+    setSourceField(rel.source_field ?? "");
+    setTargetField(rel.target_field ?? "");
+  };
+
+  const closeForm = () => {
+    setCreating(false);
+    setEditingRel(null);
+  };
+
+  const recommend = () => {
+    if (!fromName || !toName || fromName === toName) return;
+    const a = attrsOf(fromName).map((x) => x.name);
+    const b = new Set(attrsOf(toName).map((x) => x.name));
+    const common = a.filter((x) => b.has(x));
+    if (common.length === 1) {
+      setSourceField(common[0]);
+      setTargetField(common[0]);
+      notify("ok", `已自动推荐连接键：${common[0]}`);
+    } else if (common.length === 0) {
+      notify("err", "两端没有同名属性，请人工选择连接键");
+    } else {
+      notify("err", `存在多个共同属性，请手动选择：${common.join("、")}`);
+    }
+  };
+
+  const save = async () => {
     setSaving(true);
     try {
-      const res = await ontologyFetch("/api/v1/ontology/relations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          fromEntity: entity.name,
-          toEntity: to,
-          cardinality,
-          sourceField: sourceField || undefined,
-          targetField: targetField || undefined,
-        }),
-      });
+      const body = {
+        name,
+        cardinality,
+        sourceField: sourceField || undefined,
+        targetField: targetField || undefined,
+      };
+      const res = editingRel
+        ? await ontologyFetch(`/api/v1/ontology/relations/${encodeURIComponent(editingRel.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })
+        : await ontologyFetch("/api/v1/ontology/relations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...body, fromEntity: fromName, toEntity: toName }),
+          });
       const json = await res.json();
       if (!res.ok) {
         notify("err", json.error?.message ?? `HTTP ${res.status}`);
         return;
       }
-      setName("");
-      setSourceField("");
-      setTargetField("");
+      closeForm();
       await reload();
-      notify("ok", `关系 ${name} 已创建`);
+      notify("ok", editingRel ? `关系 ${name} 已更新` : `关系 ${name} 已创建`);
     } catch (error) {
       notify("err", String(error));
     } finally {
@@ -838,31 +892,43 @@ function EntityRelations({
               <th className="px-3 py-2 font-medium">名称</th>
               <th className="px-3 py-2 font-medium">方向</th>
               <th className="px-3 py-2 font-medium">基数</th>
-              <th className="px-3 py-2 font-medium">源属性</th>
-              <th className="px-3 py-2 font-medium">目标属性</th>
+              <th className="px-3 py-2 font-medium">连接键</th>
               <th className="px-3 py-2 font-medium" />
             </tr>
           </thead>
           <tbody>
-            {relations.map((r) => (
-              <tr key={r.id} className="border-b border-border last:border-b-0">
-                <td className="px-3 py-2 font-medium text-foreground">{r.name}</td>
-                <td className="px-3 py-2 text-muted">
-                  {r.from_entity} → {r.to_entity}
-                </td>
-                <td className="px-3 py-2 text-muted">{r.cardinality}</td>
-                <td className="px-3 py-2 text-muted">{r.source_field ?? "—"}</td>
-                <td className="px-3 py-2 text-muted">{r.target_field ?? "—"}</td>
-                <td className="px-3 py-2 text-right">
-                  <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => remove(r)}>
-                    删除
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {relations.map((r) => {
+              const hasKeys = Boolean(r.source_field && r.target_field);
+              return (
+                <tr key={r.id} className="border-b border-border last:border-b-0">
+                  <td className="px-3 py-2 font-medium text-foreground">{r.name}</td>
+                  <td className="px-3 py-2 text-muted">
+                    {r.from_entity} → {r.to_entity}
+                  </td>
+                  <td className="px-3 py-2 text-muted">{r.cardinality}</td>
+                  <td className="px-3 py-2">
+                    {hasKeys ? (
+                      <span className="font-mono text-xs text-foreground">
+                        {r.source_field} = {r.target_field}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-amber-600">未登记连接键（路径检索不可用）</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button type="button" className="mr-3 text-xs text-blue-600 hover:underline" onClick={() => openEdit(r)}>
+                      编辑
+                    </button>
+                    <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => remove(r)}>
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {relations.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-muted-light">
+                <td colSpan={5} className="px-3 py-6 text-center text-muted-light">
                   暂无关系
                 </td>
               </tr>
@@ -871,66 +937,95 @@ function EntityRelations({
         </table>
       </div>
 
-      <div className="rounded-lg border border-border bg-surface-subtle p-3">
-        <h3 className="mb-2 text-xs font-semibold text-foreground">新建关系（起点 = 当前对象）</h3>
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="text-[11px] text-muted-light">
-            名称
-            <input className={`mt-1 w-40 ${inputClass}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="has_events" />
-          </label>
-          <label className="text-[11px] text-muted-light">
-            终点对象
-            <select className={`mt-1 w-40 ${inputClass}`} value={to} onChange={(e) => setTo(e.target.value)}>
-              <option value="">选择对象</option>
-              {entities
-                .filter((e) => e.name !== entity.name)
-                .map((e) => (
-                  <option key={e.id} value={e.name}>
-                    {e.name}
+      {formOpen ? (
+        <div className="rounded-lg border border-border bg-surface-subtle p-3">
+          <h3 className="mb-2 text-xs font-semibold text-foreground">
+            {editingRel ? `编辑关系 ${editingRel.name}` : "新建关系"}
+            {editingRel ? <span className="ml-2 font-normal text-muted-light">（两端实体不可改）</span> : null}
+          </h3>
+          <div className="flex flex-wrap items-end gap-2">
+            {!lockDirection ? (
+              <label className="text-[11px] text-muted-light">
+                起点对象
+                <select className={`mt-1 w-40 ${inputClass}`} value={fromName} onChange={(e) => { setFromName(e.target.value); setSourceField(""); }}>
+                  <option value="">选择对象</option>
+                  {entities
+                    .filter((e) => e.name !== toName)
+                    .map((e) => (
+                      <option key={e.id} value={e.name}>
+                        {e.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : (
+              <span className="self-center rounded-lg border border-border bg-surface px-2 py-1.5 text-xs text-muted">
+                {fromName} → {toName}
+              </span>
+            )}
+            {!lockDirection ? (
+              <label className="text-[11px] text-muted-light">
+                终点对象
+                <select className={`mt-1 w-40 ${inputClass}`} value={toName} onChange={(e) => { setToName(e.target.value); setTargetField(""); }}>
+                  <option value="">选择对象</option>
+                  {entities
+                    .filter((e) => e.name !== fromName)
+                    .map((e) => (
+                      <option key={e.id} value={e.name}>
+                        {e.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+            <label className="text-[11px] text-muted-light">
+              名称
+              <input className={`mt-1 w-40 ${inputClass}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="has_events" />
+            </label>
+            <label className="text-[11px] text-muted-light">
+              基数
+              <select className={`mt-1 w-24 ${inputClass}`} value={cardinality} onChange={(e) => setCardinality(e.target.value)}>
+                {["1:1", "1:N", "N:1", "N:N"].map((c) => (
+                  <option key={c} value={c}>
+                    {c}
                   </option>
                 ))}
-            </select>
-          </label>
-          <label className="text-[11px] text-muted-light">
-            基数
-            <select className={`mt-1 w-24 ${inputClass}`} value={cardinality} onChange={(e) => setCardinality(e.target.value)}>
-              {["1:1", "1:N", "N:1", "N:N"].map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-[11px] text-muted-light">
-            源属性
-            <select className={`mt-1 w-36 ${inputClass}`} value={sourceField} onChange={(e) => setSourceField(e.target.value)}>
-              <option value="">选择属性</option>
-              {entity.attributes.map((a) => (
-                <option key={a.id} value={a.name}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-[11px] text-muted-light">
-            目标属性
-            <select className={`mt-1 w-36 ${inputClass}`} value={targetField} onChange={(e) => setTargetField(e.target.value)}>
-              <option value="">选择属性</option>
-              {(entities.find((e) => e.name === to)?.attributes ?? []).map((a) => (
-                <option key={a.id} value={a.name}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="button" className={btnPrimary} disabled={saving || !name.trim() || !to} onClick={create}>
-            {saving ? "创建中…" : "创建关系"}
-          </button>
+              </select>
+            </label>
+            <label className="text-[11px] text-muted-light">
+              源属性
+              <select className={`mt-1 w-36 ${inputClass}`} value={sourceField} onChange={(e) => setSourceField(e.target.value)}>
+                <option value="">选择属性</option>
+                {attrsOf(fromName).map((a) => (
+                  <option key={a.id} value={a.name}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-[11px] text-muted-light">
+              目标属性
+              <select className={`mt-1 w-36 ${inputClass}`} value={targetField} onChange={(e) => setTargetField(e.target.value)}>
+                <option value="">选择属性</option>
+                {attrsOf(toName).map((a) => (
+                  <option key={a.id} value={a.name}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className={btnGhost} onClick={recommend} disabled={!fromName || !toName}>
+              自动推荐
+            </button>
+            <button type="button" className={btnPrimary} disabled={saving || !name.trim() || (!lockDirection && !toName)} onClick={save}>
+              {saving ? "保存中…" : editingRel ? "保存修改" : "创建关系"}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-muted-light">
+            连接键填两端的属性名（traverse 编译 JOIN 时经绑定映射翻译为物理列）；两端同时登记或同时为空。
+          </p>
         </div>
-        <p className="mt-2 text-[11px] text-muted-light">
-          源/目标属性填两端的属性名（traverse 编译 JOIN 时经绑定映射翻译为物理列）。
-        </p>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -1908,8 +2003,15 @@ function CanvasView({
                     stroke="currentColor"
                     className={selected && !dim ? "text-primary" : "text-muted-light"}
                     strokeWidth={selected && !dim ? 1.8 : 1.2}
+                    strokeDasharray={r.source_field && r.target_field ? undefined : "4 3"}
                     markerEnd="url(#onto-arrow)"
-                  />
+                  >
+                    <title>
+                      {r.source_field && r.target_field
+                        ? `${r.source_field} = ${r.target_field}`
+                        : "未登记连接键——在「本体管理 → 本体关系」编辑后路径检索可用"}
+                    </title>
+                  </line>
                   <text x={mx} y={my - 4} textAnchor="middle" className="fill-muted-light text-[9px]">
                     {r.name} · {r.cardinality}
                   </text>

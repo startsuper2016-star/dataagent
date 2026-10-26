@@ -595,10 +595,81 @@ const handleRelationsRoute = async (
     return handleRelationCreate(request, db);
   }
   if (rest.length === 1) {
+    if (method === "PUT") {
+      return handleRelationUpdate(request, rest[0] ?? "", context);
+    }
     requireMethod(method, "DELETE");
     return handleRelationDelete(rest[0] ?? "", db);
   }
   throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知关系端点: ${rest.join("/")}`);
+};
+
+/** PUT /relations/:id —— 编辑关系（两端实体不可改；连接键是 traverse 路径检索的编译依据）。 */
+const handleRelationUpdate = async (
+  request: IncomingMessage,
+  relationId: string,
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  const existing = db
+    .prepare(
+      `SELECT r.id, r.from_entity_id, r.to_entity_id, ef.name AS from_entity, et.name AS to_entity
+       FROM ont_relations r
+       JOIN ont_entities ef ON ef.id = r.from_entity_id
+       JOIN ont_entities et ON et.id = r.to_entity_id
+       WHERE r.id = ?`
+    )
+    .get(relationId) as
+    | { id: string; from_entity_id: string; to_entity_id: string; from_entity: string; to_entity: string }
+    | undefined;
+  if (!existing) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知关系: ${relationId}`);
+  }
+  const body = await readJsonBody(request);
+  const name = stringValue(body.name);
+  if (!name) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 name");
+  }
+  const cardinality = stringValue(body.cardinality) ?? "1:N";
+  if (!CARDINALITY_VALUES.includes(cardinality)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `cardinality 仅支持 ${CARDINALITY_VALUES.join("/")}: ${cardinality}`);
+  }
+  const sourceField = stringValue(body.sourceField);
+  const targetField = stringValue(body.targetField);
+  // 连接键须为对应端实体的已登记属性（traverse 编译 JOIN 时经 fieldMap 翻译为物理列）
+  const validateField = async (field: string | undefined, entityName: string, entityId: string): Promise<string | null> => {
+    if (!field) {
+      return null;
+    }
+    if (!isSafeIdentifier(field)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `关系字段含非法字符: ${field}`);
+    }
+    const known = db
+      .prepare("SELECT 1 FROM ont_attributes WHERE entity_id = ? AND name = ?")
+      .get(entityId, field);
+    if (!known) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `${entityName} 不存在属性: ${field}`);
+    }
+    return field;
+  };
+  const source = await validateField(sourceField, existing.from_entity, existing.from_entity_id);
+  const target = await validateField(targetField, existing.to_entity, existing.to_entity_id);
+  if (Boolean(source) !== Boolean(target)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "sourceField 与 targetField 必须同时登记或同时为空");
+  }
+  db.prepare(
+    "UPDATE ont_relations SET name = ?, cardinality = ?, source_field = ?, target_field = ?, description = COALESCE(?, description) WHERE id = ?"
+  ).run(name, cardinality, source, target, stringValue(body.description) ?? null, relationId);
+  return ok({
+    id: relationId,
+    name,
+    from_entity: existing.from_entity,
+    to_entity: existing.to_entity,
+    cardinality,
+    source_field: source,
+    target_field: target,
+    description: stringValue(body.description) ?? null,
+  });
 };
 
 /** POST /relations —— 建关系边：两端实体必须存在，source/target_field 过标识符白名单（traverse 拼进 JOIN）。 */
