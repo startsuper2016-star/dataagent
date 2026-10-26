@@ -124,23 +124,50 @@ export function OntologyPanel({ onBack }: { onBack: () => void }) {
     setMessage({ kind, text });
   }, []);
 
-  const reload = useCallback(async () => {
-    const [entRes, ctxRes, verRes, dsRes] = await Promise.all([
-      ontologyFetch("/api/v1/ontology/entities").then((r) => r.json()),
-      ontologyFetch("/api/v1/ontology/context").then((r) => r.json()),
-      ontologyFetch("/api/v1/ontology/versions").then((r) => r.json()),
-      ontologyFetch("/api/v1/ontology/datasource/tables").then((r) => r.json())
-    ]);
-    setEntities((entRes.data as { entities: EntityRow[] }).entities);
-    const ctx = ctxRes.data as { relations: RelationRow[]; functions: FunctionRow[] };
-    setRelations(ctx.relations);
-    setFunctions(ctx.functions);
-    setVersions((verRes.data as { versions: VersionRow[] }).versions);
-    setDsTables((dsRes.data as { tables: DsTable[] }).tables);
-  }, []);
+  const reload = useCallback(
+    async (reportErrors = false) => {
+      // 每个端点独立容错：某一路失败不拖垮其余数据，也不让 undefined 掀翻渲染
+      const unwrap = async (r: Response) => {
+        const json = await r.json();
+        if (!r.ok) {
+          throw new Error(json.error?.message ?? `HTTP ${r.status}`);
+        }
+        return json.data;
+      };
+      const results = await Promise.allSettled([
+        ontologyFetch("/api/v1/ontology/entities").then(unwrap),
+        ontologyFetch("/api/v1/ontology/context").then(unwrap),
+        ontologyFetch("/api/v1/ontology/versions").then(unwrap),
+        ontologyFetch("/api/v1/ontology/datasource/tables").then(unwrap),
+      ]);
+      const [ent, ctx, ver, ds] = results;
+      if (ent.status === "fulfilled") {
+        setEntities((ent.value as { entities: EntityRow[] }).entities);
+      }
+      if (ctx.status === "fulfilled") {
+        const data = ctx.value as { relations: RelationRow[]; functions: FunctionRow[] };
+        setRelations(data.relations);
+        setFunctions(data.functions);
+      }
+      if (ver.status === "fulfilled") {
+        setVersions((ver.value as { versions: VersionRow[] }).versions);
+      }
+      if (ds.status === "fulfilled") {
+        setDsTables((ds.value as { tables: DsTable[] }).tables);
+      }
+      if (reportErrors) {
+        for (const r of results) {
+          if (r.status === "rejected") {
+            notify("err", `加载失败：${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+          }
+        }
+      }
+    },
+    [notify],
+  );
 
   useEffect(() => {
-    reload()
+    reload(true)
       .catch((e) => notify("err", String(e)))
       .finally(() => setLoading(false));
   }, [reload, notify]);
