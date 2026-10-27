@@ -37,6 +37,10 @@ const DDL = [
     config_json TEXT, risk TEXT DEFAULT 'LOW', discovery TEXT DEFAULT 'confirm',
     intent TEXT, params_json TEXT, enabled INTEGER DEFAULT 1,
     description TEXT, created_at TEXT, updated_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS ont_action_runs (
+    id TEXT PRIMARY KEY, action_id TEXT NOT NULL REFERENCES ont_actions(id),
+    status TEXT NOT NULL DEFAULT 'succeeded', params_json TEXT,
+    row_count INTEGER, error TEXT, duration_ms INTEGER, created_at TEXT)`,
   `CREATE TABLE IF NOT EXISTS ont_versions (
     id TEXT PRIMARY KEY, ontology_id TEXT NOT NULL, version_number INTEGER NOT NULL,
     status TEXT DEFAULT 'draft', name TEXT, description TEXT,

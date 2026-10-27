@@ -1033,10 +1033,26 @@ const handleActionsRoute = async (
   if (!actionId) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少行为 ID");
   }
+  if (rest.length === 2 && rest[1] === "run") {
+    requireMethod(method, "POST");
+    return handleActionRun(request, actionId, context);
+  }
+  if (rest.length === 2 && rest[1] === "runs") {
+    requireMethod(method, "GET");
+    return ok({
+      runs: db
+        .prepare(
+          "SELECT id, status, params_json, row_count, error, duration_ms, created_at FROM ont_action_runs WHERE action_id = ? ORDER BY created_at DESC LIMIT 20"
+        )
+        .all(actionId),
+    });
+  }
   if (rest.length === 1 && method === "PUT") {
     return handleActionUpdate(request, actionId, db);
   }
   if (rest.length === 1 && method === "DELETE") {
+    // 留痕先删：ont_action_runs 外键引用动作，先删动作会被 FK 拦成 500
+    db.prepare("DELETE FROM ont_action_runs WHERE action_id = ?").run(actionId);
     const result = db.prepare("DELETE FROM ont_actions WHERE id = ?").run(actionId);
     if (result.changes === 0) {
       throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知行为: ${actionId}`);
@@ -1190,6 +1206,117 @@ const handleActionUpdate = async (
             discovery = ?, intent = ?, params_json = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`
   ).run(input.entityId, input.code, input.name, input.executor, input.configJson, input.risk, input.discovery, input.intent, input.paramsJson, input.enabled, input.description, new Date().toISOString(), actionId);
   return ok(actionRow(db, actionId));
+};
+
+/** POST /actions/:id/run —— 动作执行：仿真（预览、不留痕）或执行（留痕）。
+ *  v1 仅接 sql 只读执行器：模板 {param} 经声明契约校验后原生绑定，连接只读（第二道防线）。 */
+const handleActionRun = async (
+  request: IncomingMessage,
+  actionId: string,
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  const action = db
+    .prepare(
+      `SELECT a.id, a.code, a.executor, a.config_json, a.params_json, a.enabled
+       FROM ont_actions a WHERE a.id = ?`
+    )
+    .get(actionId) as
+    | { id: string; code: string; executor: string; config_json: string; params_json: string; enabled: number }
+    | undefined;
+  if (!action) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知行为: ${actionId}`);
+  }
+  if (action.executor !== "sql") {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "该执行器的运行时未接入（当前仅支持只读查询 sql）");
+  }
+  if (action.enabled !== 1) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "行为已停用，先启用再运行");
+  }
+  const body = await readJsonBody(request);
+  const mode = stringValue(body.mode) ?? "execute";
+  if (!["simulate", "execute"].includes(mode)) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", `mode 仅支持 simulate/execute: ${mode}`);
+  }
+  const provided = recordValue(body.params) ?? {};
+  const declared = arrayValue(safeJsonParse(action.params_json)) ?? [];
+  // fail-closed：未声明的入参拒绝；必填缺失拒绝
+  for (const key of Object.keys(provided)) {
+    if (!declared.some((d) => d.name === key)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `入参未在参数契约中声明: ${key}`);
+    }
+  }
+  for (const d of declared) {
+    const required = d.required === true;
+    const name = typeof d.name === "string" ? d.name : undefined;
+    if (!required || !name) continue;
+    if (provided[name] === undefined || provided[name] === null) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `缺少必填参数: ${name}`);
+    }
+  }
+  const config = recordValue(safeJsonParse(action.config_json)) ?? {};
+  const template = typeof config.sql === "string" ? config.sql : "";
+  // 模板 {token} → ? 原生绑定：出现顺序即绑定顺序；未声明 token 拒绝
+  const values: unknown[] = [];
+  const typed = new Map(
+    declared.filter((d) => typeof d.name === "string").map((d) => [d.name as string, d])
+  );
+  const rewritten = template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_m, token: string) => {
+    const d = typed.get(token);
+    if (!d) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `SQL 模板引用了未声明的参数: {${token}}`);
+    }
+    const raw = provided[token];
+    if (raw === undefined || raw === null) {
+      values.push(null);
+    } else if (d.type === "number") {
+      const num = Number(raw);
+      if (Number.isNaN(num)) {
+        throw new OntologyHttpError(400, "BAD_REQUEST", `参数 ${token} 需要数值，收到: ${String(raw)}`);
+      }
+      values.push(num);
+    } else if (d.type === "boolean") {
+      values.push(raw === true || raw === "true" ? 1 : 0);
+    } else {
+      values.push(String(raw));
+    }
+    return "?";
+  });
+  const conn = openSpcConnection(context.metadataStore, context.userId);
+  const started = Date.now();
+  let rows: Array<Record<string, unknown>>;
+  let columns: string[];
+  try {
+    const stmt = conn.prepare(rewritten);
+    columns = stmt.columns().map((c) => c.name);
+    const all = stmt.all(...(values as never[])) as Array<Record<string, unknown>>;
+    rows = all.slice(0, 200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (mode === "execute") {
+      db.prepare(
+        "INSERT INTO ont_action_runs (id, action_id, status, params_json, row_count, error, duration_ms, created_at) VALUES (?, ?, 'failed', ?, 0, ?, ?, ?)"
+      ).run(randomUUID(), actionId, JSON.stringify(provided), message, Date.now() - started, new Date().toISOString());
+    }
+    throw new OntologyHttpError(400, "BAD_REQUEST", `行为执行失败: ${message}`);
+  }
+  const durationMs = Date.now() - started;
+  let runId: string | null = null;
+  if (mode === "execute") {
+    runId = randomUUID();
+    db.prepare(
+      "INSERT INTO ont_action_runs (id, action_id, status, params_json, row_count, error, duration_ms, created_at) VALUES (?, ?, 'succeeded', ?, ?, NULL, ?, ?)"
+    ).run(runId, actionId, JSON.stringify(provided), rows.length, durationMs, new Date().toISOString());
+  }
+  return ok({
+    mode,
+    runId,
+    columns,
+    rows,
+    rowCount: rows.length,
+    durationMs,
+    truncated: rows.length >= 200 ? "结果截断至 200 行" : undefined,
+  });
 };
 
 /** GET /datasource/tables —— SPC 数据源物理表/视图 + 列 + 首行样例（映射编辑器左栏）。 */
@@ -1375,10 +1502,22 @@ const handleVersionSubmit = (versionId: string, db: DatabaseSync): ConfigApiResp
 /** POST /versions/:id/publish —— submitted → published（终态）。 */
 const handleVersionPublish = (versionId: string, db: DatabaseSync): ConfigApiResponse => {
   requireVersion(db, versionId, "submitted");
-  db.prepare("UPDATE ont_versions SET status = 'published', published_at = ? WHERE id = ?").run(
-    new Date().toISOString(),
-    versionId
-  );
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE ont_versions SET status = 'published', published_at = ? WHERE id = ?").run(
+      new Date().toISOString(),
+      versionId
+    );
+    // 实体状态机落地：随版本发布，成员实体推进为 published（“仅 draft 可删”门自此生效）
+    db.prepare(
+      `UPDATE ont_entities SET status = 'published' WHERE id IN
+       (SELECT source_entity_id FROM ont_version_entities WHERE version_id = ?)`
+    ).run(versionId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   return ok(versionDetail(db, versionId));
 };
 

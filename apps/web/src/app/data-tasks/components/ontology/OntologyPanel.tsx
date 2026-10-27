@@ -1534,6 +1534,7 @@ function EntityActions({
   const [description, setDescription] = useState("");
   const [actionEnabled, setActionEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState<ActionRow | null>(null);
 
   const openCreate = () => {
     setEditing(null);
@@ -1855,6 +1856,15 @@ function EntityActions({
                 <td className="px-3 py-2 text-muted">{a.discovery === "auto" ? "自动" : "人工确认"}</td>
                 <td className="px-3 py-2 text-muted">{a.intent ?? "—"}</td>
                 <td className="px-3 py-2 text-right">
+                  <button
+                    type="button"
+                    className="mr-3 text-xs text-emerald-600 hover:underline disabled:text-muted-light disabled:no-underline"
+                    disabled={a.executor !== "sql" || a.enabled !== 1}
+                    title={a.executor !== "sql" ? "该执行器运行时未接入" : a.enabled !== 1 ? "行为已停用" : undefined}
+                    onClick={() => setRunning(a)}
+                  >
+                    运行
+                  </button>
                   <button type="button" className="mr-3 text-xs text-blue-600 hover:underline" onClick={() => openEdit(a)}>
                     编辑
                   </button>
@@ -1873,6 +1883,14 @@ function EntityActions({
             ) : null}
           </tbody>
         </table>
+      {running ? (
+        <ActionRunSheet
+          action={running}
+          reload={reload}
+          notify={notify}
+          onClose={() => setRunning(null)}
+        />
+      ) : null}
       </div>
     </div>
   );
@@ -2588,6 +2606,194 @@ function Sheet({
         {children}
       </section>
     </div>
+  );
+}
+
+type RunResult = { columns: string[]; rows: Array<Record<string, unknown>>; rowCount: number; mode: string; durationMs: number };
+
+function ActionRunSheet({
+  action,
+  reload,
+  notify,
+  onClose,
+}: {
+  action: ActionRow;
+  reload: () => Promise<void>;
+  notify: (kind: "ok" | "err", text: string) => void;
+  onClose: () => void;
+}) {
+  const declared: Array<{ name: string; type: string; required: boolean }> = (() => {
+    try {
+      const raw: unknown = JSON.parse(action.params_json ?? "[]");
+      return Array.isArray(raw) ? (raw as Array<{ name: string; type: string; required: boolean }>) : [];
+    } catch {
+      return [];
+    }
+  })();
+  const config: Record<string, string> = (() => {
+    try {
+      return JSON.parse(action.config_json ?? "{}") as Record<string, string>;
+    } catch {
+      return {};
+    }
+  })();
+
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busyMode, setBusyMode] = useState<"simulate" | "execute" | null>(null);
+  const [result, setResult] = useState<RunResult | null>(null);
+  const [runs, setRuns] = useState<Array<{ id: string; status: string; row_count: number | null; error: string | null; duration_ms: number | null; created_at: string }>>([]);
+
+  const loadRuns = useCallback(async () => {
+    const res = await ontologyFetch(`/api/v1/ontology/actions/${encodeURIComponent(action.id)}/runs`);
+    const json = await res.json();
+    if (res.ok) setRuns((json.data as { runs: typeof runs }).runs);
+  }, [action.id]);
+
+  useEffect(() => {
+    loadRuns().catch(() => undefined);
+  }, [loadRuns]);
+
+  const run = async (mode: "simulate" | "execute") => {
+    setBusyMode(mode);
+    setResult(null);
+    try {
+      const res = await ontologyFetch(`/api/v1/ontology/actions/${encodeURIComponent(action.id)}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, params: values }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        notify("err", json.error?.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      setResult(json.data as RunResult);
+      notify("ok", mode === "execute" ? `执行完成（${json.data.rowCount} 行，已留痕）` : `仿真完成（${json.data.rowCount} 行预览）`);
+      await loadRuns();
+      if (mode === "execute") await reload();
+    } catch (error) {
+      notify("err", String(error));
+    } finally {
+      setBusyMode(null);
+    }
+  };
+
+  return (
+    <Sheet
+      title={`运行 ${action.name}`}
+      subtitle="仿真无副作用（预览 20 行）；执行留痕（200 行内）。api/通知执行器运行时未接入。"
+      onClose={onClose}
+    >
+      {action.executor !== "sql" ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          该行为是 {action.executor === "api" ? "外置写" : "通知"} 执行器，运行时未接入，暂不可运行。
+        </p>
+      ) : null}
+      {declared.length > 0 ? (
+        <div className="mb-3 space-y-2">
+          <span className="text-xs font-semibold text-foreground">参数</span>
+          {declared.map((d) => (
+            <label key={d.name} className="block text-[11px] text-muted-light">
+              {d.name}（{d.type}
+              {d.required ? " *必填" : ""}）
+              <input
+                className={`mt-1 ${inputClass}`}
+                value={values[d.name] ?? ""}
+                onChange={(e) => setValues((prev) => ({ ...prev, [d.name]: e.target.value }))}
+                placeholder={d.required ? "必填" : "可选"}
+              />
+            </label>
+          ))}
+        </div>
+      ) : (
+        <p className="mb-3 text-xs text-muted-light">该行为没有声明参数，直接运行即可。</p>
+      )}
+      <div className="mb-3 flex gap-2">
+        <button
+          type="button"
+          className={btnGhost}
+          disabled={busyMode !== null || action.enabled !== 1 || declared.some((d) => d.required && !values[d.name])}
+          onClick={() => run("simulate")}
+        >
+          {busyMode === "simulate" ? "仿真中…" : "运行仿真"}
+        </button>
+        <button
+          type="button"
+          className={btnPrimary}
+          disabled={busyMode !== null || action.enabled !== 1 || declared.some((d) => d.required && !values[d.name])}
+          onClick={() => run("execute")}
+        >
+          {busyMode === "execute" ? "执行中…" : "执行"}
+        </button>
+      </div>
+
+      {result ? (
+        <div className="mb-3">
+          <p className="mb-1 text-[11px] text-muted-light">
+            {result.mode === "execute" ? "执行" : "仿真"}结果 · {result.rowCount} 行 · {result.durationMs}ms
+          </p>
+          <div className="max-h-48 overflow-auto rounded-lg border border-border">
+            <table className="w-full text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-border bg-surface-subtle text-muted-light">
+                  {result.columns.map((c) => (
+                    <th key={c} className="px-2 py-1 font-medium">
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row, i) => (
+                  <tr key={i} className="border-b border-border last:border-b-0">
+                    {result.columns.map((c) => (
+                      <td key={c} className="px-2 py-1 text-foreground">
+                        {String(row[c] ?? "")}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {result.rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={result.columns.length || 1} className="px-2 py-3 text-center text-muted-light">
+                      无数据
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      <div>
+        <span className="text-xs font-semibold text-foreground">运行留痕（最近 20 次）</span>
+        <div className="mt-1 max-h-40 overflow-auto rounded-lg border border-border">
+          <table className="w-full text-left text-[11px]">
+            <tbody>
+              {runs.map((r) => (
+                <tr key={r.id} className="border-b border-border last:border-b-0">
+                  <td className="px-2 py-1">
+                    <span className={r.status === "succeeded" ? "text-emerald-600" : "text-rose-500"}>
+                      {r.status === "succeeded" ? "✓" : "✕"}
+                    </span>{" "}
+                    {r.status === "succeeded" ? `${r.row_count ?? 0} 行 · ${r.duration_ms ?? 0}ms` : r.error ?? "失败"}
+                  </td>
+                  <td className="px-2 py-1 text-right text-muted-light">
+                    {r.created_at ? new Date(r.created_at).toLocaleString("zh-CN") : ""}
+                  </td>
+                </tr>
+              ))}
+              {runs.length === 0 ? (
+                <tr>
+                  <td className="px-2 py-3 text-center text-muted-light">尚无留痕</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Sheet>
   );
 }
 

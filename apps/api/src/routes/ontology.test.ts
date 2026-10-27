@@ -1120,6 +1120,137 @@ describe("P3-5 review fixes — lifecycle integration", () => {
   });
 });
 
+describe("P3-6 action runtime and publish promotion", () => {
+  const createAction = async (code: string, template: string) => {
+    const res = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code,
+      name: code,
+      executor: "sql",
+      config: { sql: template },
+      params: [{ name: "lot", type: "string", required: true }],
+    });
+    expect(res.status).toBe(200);
+    return (bodyOf(res).data as { id: string }).id;
+  };
+
+  it("runs sql actions: simulate previews without recording, execute records the run", async () => {
+    const actionId = await createAction("run_smoke", "SELECT * FROM v_anom_wafer WHERE lot = {lot}");
+
+    const simulated = await postJson(["actions", actionId, "run"], {
+      mode: "simulate",
+      params: { lot: "L1" },
+    });
+    expect(simulated.status).toBe(200);
+    expect((bodyOf(simulated).data as { rowCount: number }).rowCount).toBeGreaterThanOrEqual(0);
+    expect((bodyOf(simulated).data as { runId: string | null }).runId).toBeNull();
+
+    const executed = await postJson(["actions", actionId, "run"], {
+      mode: "execute",
+      params: { lot: "L1" },
+    });
+    expect(executed.status).toBe(200);
+    const runId = (bodyOf(executed).data as { runId: string }).runId;
+    expect(runId).toBeTruthy();
+
+    const history = await call("GET", ["actions", actionId, "runs"], bodyRequest(""));
+    const runs = (bodyOf(history).data as { runs: Array<{ id: string; status: string }> }).runs;
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ id: runId, status: "succeeded" });
+  });
+
+  it("validates params against the declared contract and rejects undeclared template tokens", async () => {
+    const actionId = await createAction("param_guard", "SELECT * FROM v_anom_wafer WHERE lot = {lot}");
+
+    const missing = await postJson(["actions", actionId, "run"], { mode: "execute", params: {} });
+    expect(missing.status).toBe(400);
+    expect(bodyOf(missing).error?.message).toContain("缺少必填参数: lot");
+
+    const undeclared = await postJson(["actions", actionId, "run"], {
+      mode: "execute",
+      params: { lot: "L1", extra: "x" },
+    });
+    expect(undeclared.status).toBe(400);
+    expect(bodyOf(undeclared).error?.message).toContain("未在参数契约中声明");
+
+    const badToken = await createAction("bad_token", "SELECT * FROM v_anom_wafer WHERE lot = {nope}");
+    const badTokenRun = await postJson(["actions", badToken, "run"], { params: { lot: "L1" } });
+    expect(badTokenRun.status).toBe(400);
+    expect(bodyOf(badTokenRun).error?.message).toContain("未声明的参数");
+  });
+
+  it("rejects non-sql executors, disabled actions and unknown ids at run time", async () => {
+    const apiAction = await postJson(["actions"], {
+      entity: "AnomWafer",
+      code: "audit_api_action",
+      name: "外置写",
+      executor: "api",
+      config: { method: "POST", path: "https://crm.example.com/f", hosts: "crm.example.com" },
+    });
+    const apiId = (bodyOf(apiAction).data as { id: string }).id;
+    const apiRun = await postJson(["actions", apiId, "run"], { params: {} });
+    expect(apiRun.status).toBe(400);
+    expect(bodyOf(apiRun).error?.message).toContain("运行时未接入");
+
+    const sqlId = await createAction("disabled_run", "SELECT * FROM v_anom_wafer");
+    await putJson(["actions", sqlId], {
+      entity: "AnomWafer",
+      code: "disabled_run",
+      name: "disabled_run",
+      executor: "sql",
+      config: { sql: "SELECT * FROM v_anom_wafer" },
+      enabled: false,
+    });
+    const disabledRun = await postJson(["actions", sqlId, "run"], { params: {} });
+    expect(disabledRun.status).toBe(400);
+    expect(bodyOf(disabledRun).error?.message).toContain("已停用");
+
+    const unknown = await postJson(["actions", "nope", "run"], { params: {} });
+    expect(unknown.status).toBe(404);
+  });
+
+  it("deleting an action removes its run history", async () => {
+    const actionId = await createAction("with_history", "SELECT * FROM v_anom_wafer");
+    await postJson(["actions", actionId, "run"], { mode: "execute", params: {} });
+    const deleted = await delJson(["actions", actionId]);
+    expect(deleted.status).toBe(200);
+    const history = await call("GET", ["actions", actionId, "runs"], bodyRequest(""));
+    expect((bodyOf(history).data as { runs: unknown[] }).runs).toHaveLength(0);
+  });
+
+  it("publish promotes member entities to published (delete gate becomes effective)", async () => {
+    const created = await postJson(["entities"], {
+      name: "PromotedEntity",
+      attributes: [{ name: "wafer_id", type: "string" }],
+    });
+    const createdBody = bodyOf(created).data as { id: string; attributes: Array<{ id: string }> };
+    const attr = createdBody.attributes[0];
+    if (!attr) throw new Error("fixture: attributes missing");
+    await putJson(["bindings", "PromotedEntity"], {
+      table: "v_anom_wafer",
+      idColumn: "id",
+      fieldMappings: [{ attribute_id: attr.id, source_column: "wafer_id" }],
+    });
+    await call("POST", ["bindings", "PromotedEntity", "approve"], bodyRequest({}));
+
+    const version = await postJson(["versions"], { name: "v-promote", entityIds: ["eid-wafer", createdBody.id] });
+    const versionId = (bodyOf(version).data as { id: string }).id;
+    const submitted = await call("POST", ["versions", versionId, "submit"], bodyRequest({}));
+    expect(submitted.status).toBe(200);
+    const published = await call("POST", ["versions", versionId, "publish"], bodyRequest({}));
+    expect(published.status).toBe(200);
+
+    const entities = await call("GET", ["entities"], bodyRequest(""));
+    const promoted = (bodyOf(entities).data as { entities: Array<{ name: string; status: string }> }).entities.find(
+      (e) => e.name === "PromotedEntity",
+    );
+    expect(promoted?.status).toBe("published");
+
+    const blocked = await delJson(["entities", "PromotedEntity"]);
+    expect(blocked.status).toBe(409);
+  });
+});
+
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {
     const response = await call("GET", ["nope"], bodyRequest(""));
