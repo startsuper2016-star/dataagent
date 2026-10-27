@@ -1251,6 +1251,87 @@ describe("P3-6 action runtime and publish promotion", () => {
   });
 });
 
+describe("P3-7 rule evaluate and consistency", () => {
+  it("evaluates an inference rule against bound data with preview", async () => {
+    const rule = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "eval_ch1",
+      ruleType: "inference",
+      conditions: [{ field: "chamber_id", op: "=", value: "CH1" }],
+      then: "观察对象",
+    });
+    const id = (bodyOf(rule).data as { id: string }).id;
+
+    const ev = await call("POST", ["rules", id, "evaluate"], bodyRequest({}));
+    expect(ev.status).toBe(200);
+    const data = bodyOf(ev).data as {
+      entity: string;
+      matchedRows: number;
+      preview: { columns: string[]; rows: Array<Record<string, unknown>> };
+    };
+    expect(data.entity).toBe("AnomWafer");
+    expect(data.matchedRows).toBe(1);
+    expect(data.preview.rows[0]).toMatchObject({ chamber_id: "CH1" });
+  });
+
+  it("rejects logic-rule evaluate and unmapped condition fields", async () => {
+    const logic = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "eval_logic",
+      ruleType: "logic",
+      carrier: "sql",
+      then: "SELECT 1",
+    });
+    const logicId = (bodyOf(logic).data as { id: string }).id;
+    const logicEval = await call("POST", ["rules", logicId, "evaluate"], bodyRequest({}));
+    expect(logicEval.status).toBe(400);
+    expect(bodyOf(logicEval).error?.message).toContain("无 WHEN 条件");
+
+    // 新增未映射属性并让规则引用它 → 试运行 400 未映射
+    await putJson(["entities", "AnomWafer"], {
+      attributes: [
+        { name: "wafer_id" },
+        { name: "chamber_id" },
+        { name: "lot" },
+        { name: "extra_unmapped", type: "string" },
+      ],
+    });
+    const rule = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "eval_unmapped",
+      ruleType: "inference",
+      conditions: [{ field: "extra_unmapped", op: "=", value: "1" }],
+      then: "x",
+    });
+    const ruleId = (bodyOf(rule).data as { id: string }).id;
+    const ev = await call("POST", ["rules", ruleId, "evaluate"], bodyRequest({}));
+    expect(ev.status).toBe(400);
+    expect(bodyOf(ev).error?.message).toContain("未映射到物理列");
+  });
+
+  it("version consistency reports rule condition fields missing after attribute drift", async () => {
+    const rule = await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "drift_rule",
+      ruleType: "inference",
+      conditions: [{ field: "lot", op: "=", value: "L1" }],
+      then: "x",
+    });
+    expect(rule.status).toBe(200);
+
+    // 模拟漂移：直接删除属性行（API 层被规则条件守卫拦截，正常流程到不了这里）
+    metadata.db.exec("DELETE FROM ont_attributes WHERE name = 'lot' AND entity_id = 'eid-wafer'");
+
+    const version = await postJson(["versions"], { name: "v-drift", entityIds: [EID.wafer] });
+    const versionId = (bodyOf(version).data as { id: string }).id;
+    const check = await call("GET", ["versions", versionId, "check"], bodyRequest(""));
+    const checks = (bodyOf(check).data as { checks: Array<{ entity: string; ok: boolean; reason?: string }> }).checks;
+    const waferCheck = checks.find((c) => c.entity === "AnomWafer");
+    expect(waferCheck?.ok).toBe(false);
+    expect(waferCheck?.reason).toContain("规则条件字段缺失");
+  });
+});
+
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {
     const response = await call("GET", ["nope"], bodyRequest(""));

@@ -870,6 +870,10 @@ const handleRulesRoute = async (
   if (!ruleId) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", "缺少规则 ID");
   }
+  if (rest.length === 2 && rest[1] === "evaluate") {
+    requireMethod(method, "POST");
+    return handleRuleEvaluate(ruleId, context);
+  }
   if (rest.length === 1 && method === "PUT") {
     return handleRuleUpdate(request, ruleId, db);
   }
@@ -992,6 +996,73 @@ const handleRuleUpdate = async (
             conclusion = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`
   ).run(input.entityId, input.name, input.ruleType, input.carrier, input.conditionsJson, input.conclusion, input.enabled, input.description, new Date().toISOString(), ruleId);
   return ok(ruleRow(db, ruleId));
+};
+
+/** POST /rules/:id/evaluate —— 规则试运行：把 WHEN 条件编译为绑定数据上的参数化查询，
+ *  返回命中行数与预览。计算逻辑（logic 载体）无声明条件，显式拒绝。 */
+const handleRuleEvaluate = (ruleId: string, context: OntologyRouteContext): ConfigApiResponse => {
+  const db = context.metadataStore.db;
+  const rule = db
+    .prepare(
+      `SELECT r.id, r.name, r.rule_type, r.conditions_json, r.entity_id, e.name AS entity
+       FROM ont_rules r JOIN ont_entities e ON e.id = r.entity_id WHERE r.id = ?`
+    )
+    .get(ruleId) as
+    | { id: string; name: string; rule_type: string; conditions_json: string; entity_id: string; entity: string }
+    | undefined;
+  if (!rule) {
+    throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知规则: ${ruleId}`);
+  }
+  if (rule.rule_type === "logic") {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "计算逻辑规则由载体（表达式/SQL/Python）定义，无 WHEN 条件可试运行");
+  }
+  const parsed = safeJsonParse(rule.conditions_json);
+  const conditions = Array.isArray(parsed) ? (parsed as Array<[string, string, string]>) : [];
+  const binding = resolveBinding(db, rule.entity_id);
+  const source = binding.sourceSql ? `(${binding.sourceSql})` : `"${binding.table}"`;
+  const clauses: string[] = [];
+  const values: unknown[] = [];
+  for (const [field, op, rawValue] of conditions) {
+    const column = binding.fieldMap[field];
+    if (!column) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `条件字段 ${field} 未映射到物理列，无法求值`);
+    }
+    if (op === "in") {
+      throw new OntologyHttpError(400, "BAD_REQUEST", "in 运算符暂不支持试运行");
+    }
+    if (op === "contains" || op === "starts_with" || op === "ends_with") {
+      const pattern =
+        op === "contains" ? `%${rawValue}%` : op === "starts_with" ? `${rawValue}%` : `%${rawValue}`;
+      clauses.push(`"${column}" LIKE ?`);
+      values.push(pattern);
+      continue;
+    }
+    if (!["=", "!=", ">", ">=", "<", "<="].includes(op)) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", `不支持的运算符: ${op}`);
+    }
+    clauses.push(`"${column}" ${op} ?`);
+    values.push(rawValue);
+  }
+  const selectColumns = Object.entries(binding.fieldMap)
+    .map(([attr, col]) => `"${col}" AS "${attr}"`)
+    .join(", ");
+  if (!selectColumns) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "对象没有可查询的已映射属性");
+  }
+  let sql = `SELECT ${selectColumns} FROM ${source}`;
+  if (clauses.length > 0) {
+    sql += " WHERE " + clauses.join(" AND ");
+  }
+  const conn = openSpcConnection(context.metadataStore, context.userId);
+  const rows = (conn.prepare(sql).all(...(values as never[])) as Array<Record<string, unknown>>).slice(0, 10);
+  return ok({
+    entity: rule.entity,
+    rule: rule.name,
+    expr: composeRuleExpr(rule as unknown as Parameters<typeof composeRuleExpr>[0]),
+    matchedRows: rows.length,
+    truncated: rows.length >= 10 ? "预览截断至 10 行" : undefined,
+    preview: { columns: Object.keys(binding.fieldMap), rows },
+  });
 };
 
 const actionRow = (db: DatabaseSync, id: string): Record<string, unknown> | undefined =>
@@ -1764,6 +1835,29 @@ const checkEntityConsistency = (
   const total = (db.prepare("SELECT COUNT(*) AS n FROM ont_attributes WHERE entity_id = ?").get(entityId) as { n: number }).n;
   if (total > 0 && mapped * 2 < total) {
     return { entity: name, ok: false, reason: `映射覆盖 ${mapped}/${total} 低于 50%` };
+  }
+  // 规则引用一致性：启用的规则条件字段必须仍是已登记属性（防规则孤儿化）
+  const attributeNames = new Set(
+    (db.prepare("SELECT name FROM ont_attributes WHERE entity_id = ?").all(entityId) as { name: string }[]).map(
+      (a) => a.name,
+    ),
+  );
+  const brokenRules = (
+    db.prepare("SELECT name, conditions_json FROM ont_rules WHERE entity_id = ? AND enabled = 1").all(entityId) as Array<{
+      name: string;
+      conditions_json: string;
+    }>
+  ).filter((r) => {
+    const parsed = safeJsonParse(r.conditions_json);
+    const fields = Array.isArray(parsed) ? (parsed as Array<[string]>).map((c) => c[0]) : [];
+    return fields.some((f) => !attributeNames.has(f));
+  });
+  if (brokenRules.length > 0) {
+    return {
+      entity: name,
+      ok: false,
+      reason: `规则条件字段缺失: ${brokenRules.map((r) => r.name).join("、")}`,
+    };
   }
   return { entity: name, ok: true };
 };

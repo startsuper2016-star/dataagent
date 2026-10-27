@@ -1247,6 +1247,14 @@ function EntityRules({
   const [thenText, setThenText] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [evaluatingId, setEvaluatingId] = useState<string | null>(null);
+  const [evaluateResult, setEvaluateResult] = useState<{
+    rule: string;
+    expr: string;
+    matchedRows: number;
+    truncated?: string;
+    preview: { columns: string[]; rows: Array<Record<string, unknown>> };
+  } | null>(null);
 
   const openCreate = () => {
     setEditing(null);
@@ -1312,6 +1320,26 @@ function EntityRules({
       notify("err", String(error));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const evaluate = async (rule: RuleRow) => {
+    setEvaluatingId(rule.id);
+    setEvaluateResult(null);
+    try {
+      const res = await ontologyFetch(`/api/v1/ontology/rules/${encodeURIComponent(rule.id)}/evaluate`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        notify("err", json.error?.message ?? `HTTP ${res.status}`);
+        return;
+      }
+      setEvaluateResult(json.data as NonNullable<typeof evaluateResult>);
+    } catch (error) {
+      notify("err", String(error));
+    } finally {
+      setEvaluatingId(null);
     }
   };
 
@@ -1462,6 +1490,60 @@ function EntityRules({
         </div>
       ) : null}
 
+      {evaluateResult ? (
+        <div className="mb-3 rounded-lg border border-border bg-surface-subtle p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-foreground">试运行 · {evaluateResult.rule}</span>
+            <span
+              className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                evaluateResult.matchedRows > 0
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-border bg-surface text-muted-light"
+              }`}
+            >
+              命中 {evaluateResult.matchedRows} 行
+            </span>
+            {evaluateResult.truncated ? <span className="text-[10px] text-muted-light">{evaluateResult.truncated}</span> : null}
+            <span className="flex-1" />
+            <button type="button" className="text-xs text-muted-light hover:text-foreground" onClick={() => setEvaluateResult(null)}>
+              关闭
+            </button>
+          </div>
+          <p className="mt-1 font-mono text-[11px] text-muted">{evaluateResult.expr}</p>
+          <div className="mt-2 max-h-40 overflow-auto rounded-lg border border-border bg-surface">
+            <table className="w-full text-left text-[11px]">
+              <thead>
+                <tr className="border-b border-border text-muted-light">
+                  {evaluateResult.preview.columns.map((c) => (
+                    <th key={c} className="px-2 py-1 font-medium">
+                      {c}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {evaluateResult.preview.rows.map((row, i) => (
+                  <tr key={i} className="border-b border-border last:border-b-0">
+                    {evaluateResult.preview.columns.map((c) => (
+                      <td key={c} className="px-2 py-1 text-foreground">
+                        {String(row[c] ?? "")}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {evaluateResult.preview.rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={evaluateResult.preview.columns.length || 1} className="px-2 py-3 text-center text-muted-light">
+                      无命中数据
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
       <div className="overflow-hidden rounded-lg border border-border">
         <table className="w-full text-left text-sm">
           <thead>
@@ -1483,6 +1565,16 @@ function EntityRules({
                 <td className="max-w-md truncate px-3 py-2 font-mono text-xs text-muted">{r.expr ?? "—"}</td>
                 <td className="px-3 py-2">{r.enabled === 1 ? <span className="text-emerald-600">✓</span> : <span className="text-muted-light">停用</span>}</td>
                 <td className="px-3 py-2 text-right">
+                  {r.rule_type !== "logic" ? (
+                    <button
+                      type="button"
+                      className="mr-3 text-xs text-emerald-600 hover:underline disabled:text-muted-light disabled:no-underline"
+                      disabled={evaluatingId === r.id}
+                      onClick={() => evaluate(r)}
+                    >
+                      {evaluatingId === r.id ? "求值中…" : "试运行"}
+                    </button>
+                  ) : null}
                   <button type="button" className="mr-3 text-xs text-blue-600 hover:underline" onClick={() => openEdit(r)}>
                     编辑
                   </button>

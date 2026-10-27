@@ -64,6 +64,23 @@ const TOOL_MANIFEST = [
     }
   },
   {
+    name: "ontology_run_action",
+    description:
+      "Run one ontology action (agent-invokable contract declared in the ontology governance workbench) "
+      + "and return its result. action_code: 行为英文标识（ontology_context 的 actions 清单，含 intent/风险/参数契约）；"
+      + "params: 参数契约入参；mode: simulate=仿真预览（≤20 行，不留痕）/ execute=执行并留痕。"
+      + "典型用途：按意图标签匹配后执行只读查询动作（如 查询异常明细）。错误时 isError content 原文可直接自纠。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action_code: { type: "string", description: "行为英文标识" },
+        params: { type: "object", additionalProperties: true, description: "行为参数契约入参" },
+        mode: { type: "string", enum: ["simulate", "execute"], default: "execute", description: "仿真或执行" }
+      },
+      required: ["action_code"]
+    }
+  },
+  {
     name: "ontology_ping",
     description: "Connectivity check for the ontology-logic MCP server. Returns {\"pong\": true}.",
     inputSchema: { type: "object", properties: {} }

@@ -183,5 +183,26 @@ def start_mcp_server(host: str = "", port: int = 0, transport: str = "") -> None
     mcp.run(transport=effective_transport)
 
 
+@mcp.tool()
+def ontology_run_action(
+    action_code: str,
+    params: dict | None = None,
+    mode: Literal["simulate", "execute"] = "execute",
+) -> CallToolResult:
+    """Run one ontology action (agent-invokable contract) and return its result.
+
+    Args:
+        action_code: 行为英文标识（见 ontology_context 的 actions 清单或治理台行为页签）。
+        params: 行为参数契约要求的入参对象（可选；必填参数缺失会失败）。
+        mode: simulate=仿真预览（≤20 行，不留痕）；execute=执行并留痕。
+    """
+    try:
+        result = get_executor().callbacks.run_action(action_code, params or {}, mode)
+    except RuntimeError as err:
+        logger.warning("ontology_run_action(%s) failed: %s", action_code, err)
+        return _error_result(str(err))
+    return _json_result(result)
+
+
 if __name__ == "__main__":
     start_mcp_server()

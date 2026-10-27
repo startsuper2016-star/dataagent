@@ -110,6 +110,42 @@ class OntologyCallbackClient:
             raise RuntimeError(f"ontology 回调 {path} 响应不是 JSON 对象")
         return body.get("data")
 
+    def _get(self, path: str) -> Any:
+        """GET one callback request and unwrap the contracts envelope（D5 同口径不重试）."""
+        headers = {"Authorization": f"Bearer {self.service_token}"} if self.service_token else {}
+        url = f"{self.api_base_url}{path}"
+        try:
+            response = self._client.get(url, headers=headers)
+        except httpx.HTTPError as err:  # 含 TimeoutException / ConnectError 等传输失败
+            raise RuntimeError(f"ontology 回调 {path} 失败（D5 不重试）: {err}") from err
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        error = body.get("error") if isinstance(body, dict) else None
+        failed = response.status_code != 200 or error is not None or (
+            isinstance(body, dict) and body.get("success") is False
+        )
+        if failed:
+            message = error.get("message") if isinstance(error, dict) else error
+            if message:
+                raise RuntimeError(f"ontology 回调 {path} 失败: {message}")
+            raise RuntimeError(f"ontology 回调 {path} 返回非 200: HTTP {response.status_code}")
+        if not isinstance(body, dict):
+            raise RuntimeError(f"ontology 回调 {path} 响应不是 JSON 对象")
+        return body.get("data")
+
+    def run_action(self, action_code: str, params: dict[str, Any] | None = None, mode: str = "execute") -> Any:
+        """按 code 定位行为并运行（POST /actions/{id}/run，mode=simulate|execute）。"""
+        actions = (self._get("/api/v1/ontology/actions") or {}).get("actions", [])
+        match = next((a for a in actions if a.get("code") == action_code), None)
+        if match is None:
+            raise RuntimeError(f"未找到行为: {action_code}")
+        return self._post(
+            f"/api/v1/ontology/actions/{match['id']}/run",
+            {"mode": mode, "params": params or {}},
+        )
+
     # --- 数据助手（返回形态与元枢 helper 逐一对齐） ---------------------------------
 
     def query_rows(
