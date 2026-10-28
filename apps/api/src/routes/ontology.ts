@@ -7,6 +7,7 @@ import {
   type AppErrorCode
 } from "@datafoundry/contracts";
 import {
+  buildWhere,
   executeOntologySql,
   objectQuery,
   resolveBinding,
@@ -872,7 +873,7 @@ const handleRulesRoute = async (
   }
   if (rest.length === 2 && rest[1] === "evaluate") {
     requireMethod(method, "POST");
-    return handleRuleEvaluate(ruleId, context);
+    return handleRuleEvaluate(request, ruleId, context);
   }
   if (rest.length === 1 && method === "PUT") {
     return handleRuleUpdate(request, ruleId, db);
@@ -1000,15 +1001,27 @@ const handleRuleUpdate = async (
 
 /** POST /rules/:id/evaluate —— 规则试运行：把 WHEN 条件编译为绑定数据上的参数化查询，
  *  返回命中行数与预览。计算逻辑（logic 载体）无声明条件，显式拒绝。 */
-const handleRuleEvaluate = (ruleId: string, context: OntologyRouteContext): ConfigApiResponse => {
+const handleRuleEvaluate = async (
+  request: IncomingMessage,
+  ruleId: string,
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
   const db = context.metadataStore.db;
   const rule = db
     .prepare(
-      `SELECT r.id, r.name, r.rule_type, r.conditions_json, r.entity_id, e.name AS entity
+      `SELECT r.id, r.name, r.rule_type, r.conditions_json, r.conclusion, r.entity_id, e.name AS entity
        FROM ont_rules r JOIN ont_entities e ON e.id = r.entity_id WHERE r.id = ?`
     )
     .get(ruleId) as
-    | { id: string; name: string; rule_type: string; conditions_json: string; entity_id: string; entity: string }
+    | {
+        id: string;
+        name: string;
+        rule_type: string;
+        conditions_json: string;
+        conclusion: string | null;
+        entity_id: string;
+        entity: string;
+      }
     | undefined;
   if (!rule) {
     throw new OntologyHttpError(404, "RESOURCE_NOT_FOUND", `未知规则: ${ruleId}`);
@@ -1016,6 +1029,9 @@ const handleRuleEvaluate = (ruleId: string, context: OntologyRouteContext): Conf
   if (rule.rule_type === "logic") {
     throw new OntologyHttpError(400, "BAD_REQUEST", "计算逻辑规则由载体（表达式/SQL/Python）定义，无 WHEN 条件可试运行");
   }
+  const body = await readJsonBody(request);
+  const filters = recordValue(body.filters) ?? {};
+  const limit = Math.min(Math.max(numberValue(body.limit) ?? 10, 1), 100);
   const parsed = safeJsonParse(rule.conditions_json);
   const conditions = Array.isArray(parsed) ? (parsed as Array<[string, string, string]>) : [];
   const binding = resolveBinding(db, rule.entity_id);
@@ -1028,7 +1044,7 @@ const handleRuleEvaluate = (ruleId: string, context: OntologyRouteContext): Conf
       throw new OntologyHttpError(400, "BAD_REQUEST", `条件字段 ${field} 未映射到物理列，无法求值`);
     }
     if (op === "in") {
-      throw new OntologyHttpError(400, "BAD_REQUEST", "in 运算符暂不支持试运行");
+      throw new OntologyHttpError(400, "BAD_REQUEST", "in 运算符暂不支持求值");
     }
     if (op === "contains" || op === "starts_with" || op === "ends_with") {
       const pattern =
@@ -1043,25 +1059,46 @@ const handleRuleEvaluate = (ruleId: string, context: OntologyRouteContext): Conf
     clauses.push(`"${column}" ${op} ?`);
     values.push(rawValue);
   }
+  // 行级过滤（可选）：与规则条件 AND 组合，复用 filter DSL（12 操作符）
+  let filterWhere: string[] = [];
+  let filterParams: unknown[] = [];
+  if (Object.keys(filters).length > 0) {
+    try {
+      const built = buildWhere(binding.fieldMap, filters);
+      filterWhere = built.where;
+      filterParams = built.params;
+    } catch (error) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", error instanceof Error ? error.message : String(error));
+    }
+  }
   const selectColumns = Object.entries(binding.fieldMap)
     .map(([attr, col]) => `"${col}" AS "${attr}"`)
     .join(", ");
   if (!selectColumns) {
     throw new OntologyHttpError(400, "BAD_REQUEST", "对象没有可查询的已映射属性");
   }
+  const whereParts = [...clauses, ...filterWhere];
   let sql = `SELECT ${selectColumns} FROM ${source}`;
-  if (clauses.length > 0) {
-    sql += " WHERE " + clauses.join(" AND ");
+  if (whereParts.length > 0) {
+    sql += " WHERE " + whereParts.join(" AND ");
   }
   const conn = openSpcConnection(context.metadataStore, context.userId);
-  const rows = (conn.prepare(sql).all(...(values as never[])) as Array<Record<string, unknown>>).slice(0, 10);
+  const conclusion = rule.conclusion ?? "";
+  const rows = (
+    conn.prepare(sql).all(...(values as never[]), ...(filterParams as never[])) as Array<
+      Record<string, unknown>
+    >
+  )
+    .slice(0, limit)
+    .map((row) => ({ ...row, rule_conclusion: conclusion }));
   return ok({
     entity: rule.entity,
     rule: rule.name,
     expr: composeRuleExpr(rule as unknown as Parameters<typeof composeRuleExpr>[0]),
+    conclusion,
     matchedRows: rows.length,
-    truncated: rows.length >= 10 ? "预览截断至 10 行" : undefined,
-    preview: { columns: Object.keys(binding.fieldMap), rows },
+    truncated: rows.length >= limit ? "预览截断至 limit 行" : undefined,
+    preview: { columns: [...Object.keys(binding.fieldMap), "rule_conclusion"], rows },
   });
 };
 

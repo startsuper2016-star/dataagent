@@ -204,5 +204,28 @@ def ontology_run_action(
     return _json_result(result)
 
 
+@mcp.tool()
+def ontology_eval_rule(
+    rule_name: str,
+    entity: str | None = None,
+    filters: dict | None = None,
+    limit: int = 10,
+) -> CallToolResult:
+    """Evaluate one ontology inference/validation rule against bound data.
+
+    Args:
+        rule_name: 规则名（见 ontology_context 的 rules 清单，含 expr 可读表达式）。
+        entity: 可选，限定作用对象（不同对象存在同名规则时必填）。
+        filters: 可选行级过滤（如 {"station": "PVD_TI"}），与规则条件 AND 组合。
+        limit: 预览行数上限（默认 10，最大 100）；每行附 rule_conclusion 结论标注。
+    """
+    try:
+        result = get_executor().callbacks.eval_rule(rule_name, entity, filters, limit)
+    except RuntimeError as err:
+        logger.warning("ontology_eval_rule(%s) failed: %s", rule_name, err)
+        return _error_result(str(err))
+    return _json_result(result)
+
+
 if __name__ == "__main__":
     start_mcp_server()

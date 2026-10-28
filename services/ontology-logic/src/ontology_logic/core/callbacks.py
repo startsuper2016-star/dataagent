@@ -146,6 +146,30 @@ class OntologyCallbackClient:
             {"mode": mode, "params": params or {}},
         )
 
+    def eval_rule(
+        self,
+        rule_name: str,
+        entity: str | None = None,
+        filters: dict[str, Any] | None = None,
+        limit: int = 10,
+    ) -> Any:
+        """按名定位规则并试运行（POST /rules/{id}/evaluate，filters/limit 透传）。"""
+        rules = (self._get("/api/v1/ontology/rules") or {}).get("rules", [])
+        match = next(
+            (
+                r
+                for r in rules
+                if r.get("name") == rule_name and (entity is None or r.get("entity") == entity)
+            ),
+            None,
+        )
+        if match is None:
+            raise RuntimeError(f"未找到规则: {rule_name}")
+        return self._post(
+            f"/api/v1/ontology/rules/{match['id']}/evaluate",
+            {"filters": filters or {}, "limit": limit},
+        )
+
     # --- 数据助手（返回形态与元枢 helper 逐一对齐） ---------------------------------
 
     def query_rows(

@@ -81,6 +81,23 @@ const TOOL_MANIFEST = [
     }
   },
   {
+    name: "ontology_eval_rule",
+    description:
+      "Evaluate one ontology inference/validation rule against its bound data and return matching rows "
+      + "with a rule_conclusion label column. rule_name: 规则名（ontology_context 的 rules 清单含 expr 可读表达式）；"
+      + "filters: 可选行级过滤（与规则条件 AND 组合）。典型用途：验证业务判断是否命中数据（如 VIP 客户标记）。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rule_name: { type: "string", description: "规则名" },
+        entity: { type: "string", description: "限定作用对象（可选）" },
+        filters: { type: "object", additionalProperties: true, description: "行级过滤条件" },
+        limit: { type: "integer", default: 10, maximum: 100 }
+      },
+      required: ["rule_name"]
+    }
+  },
+  {
     name: "ontology_ping",
     description: "Connectivity check for the ontology-logic MCP server. Returns {\"pong\": true}.",
     inputSchema: { type: "object", properties: {} }

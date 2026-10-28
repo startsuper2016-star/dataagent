@@ -26,6 +26,16 @@ async def main() -> None:
             assert not result.isError, result.content[0].text[:200] if result.content else "empty"
 
             # 未声明 token / 缺参走 isError 自纠通道
+
+            # 规则求值（ontology_eval_rule）：live 规则 + 行过滤
+            rule = await session.call_tool(
+                "ontology_eval_rule",
+                {"rule_name": "live_eval_rule", "filters": {"lot_id": "L2"}, "limit": 5},
+            )
+            print("eval isError:", rule.isError)
+            print("eval content:", rule.content[0].text[:400])
+            assert not rule.isError
+
             bad = await session.call_tool(
                 "ontology_run_action",
                 {"action_code": "mcp_discover_probe", "params": {}, "mode": "execute"},
