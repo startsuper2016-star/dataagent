@@ -3606,12 +3606,13 @@ function StepAssistantMessage({
   const collapsedToolChips = buildToolChipSummaries(toolSummaries, 3);
   const processGroupId = buildGroupIdForAssistantMessage(message.id, effectiveToolCalls);
   const toolActionLabel = isCollaborationComplete
-    ? resolveCollaborationCompletedStepLabel(rawToolNames, linkedCollaboration?.toolName)
-    : resolveToolStepActionLabel(rawToolNames);
+    ? resolveCollaborationCompletedStepLabel(rawToolNames, linkedCollaboration?.toolName, t)
+    : resolveToolStepActionLabel(rawToolNames, t);
   const collaborationStepLabel = resolveCollaborationStepLabel(
     rawToolNames,
     isActive,
     linkedCollaboration?.toolName,
+    t,
   );
 
   const pendingToolName = pendingCollaborationToolCall?.name;
@@ -3625,7 +3626,7 @@ function StepAssistantMessage({
   const kindLabel = isCollaborationComplete && displayHasToolCalls
     ? toolActionLabel
     : isWaitingForUser || hostsPendingSlot
-      ? resolveToolStepActionLabel(waitingToolNames)
+      ? resolveToolStepActionLabel(waitingToolNames, t)
       : isCollaborationStep
         ? collaborationStepLabel
         : isFinalAnswer
@@ -3643,13 +3644,16 @@ function StepAssistantMessage({
         : kindLabel
     : kindLabel;
 
-  const summary = resolveStepSummaryText({
-    content: processContent,
-    hasToolCalls: displayHasToolCalls,
-    displayToolNames: toolNames,
-    toolActionLabel,
-    isThought,
-  });
+  const summary = resolveStepSummaryText(
+    {
+      content: processContent,
+      hasToolCalls: displayHasToolCalls,
+      displayToolNames: toolNames,
+      toolActionLabel,
+      isThought,
+    },
+    t,
+  );
   const theme = getStepCardTheme({
     hasToolCalls: displayHasToolCalls,
     isActive,

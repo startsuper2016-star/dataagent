@@ -1,24 +1,30 @@
-const toolActionLabels: Record<string, string> = {
-  list_data_sources: "List data sources",
-  inspect_schema: "Inspect schema",
-  preview_table: "Preview data",
-  run_sql_readonly: "Run query",
-  retrieve_knowledge: "Retrieve knowledge",
-  read_file: "Read file",
-  edit_file: "Edit file",
-  write_file: "Write file",
-  list_files: "Browse files",
-  grep: "Search files",
-  mkdir: "Create directory",
-  file_stat: "Get file info",
-  execute_command: "Run command",
-  promote_workspace_file: "Promote workspace file",
-  task_write: "Write task",
-  task_update: "Update task",
-  task_complete: "Complete task",
-  task_check: "Check task",
-  ask_user: "Waiting for confirmation",
-  submit_plan: "Submit plan",
+import { createTranslator } from "../../i18n/translate";
+import type { TranslateFn } from "../../i18n/types";
+
+// 默认 en 翻译器：直调（旧测试/无上下文场景）保持英文断言不变；运行时传 zh 的 t 即中文。
+const enT = createTranslator("en");
+
+const toolActionLabelKeys: Record<string, string> = {
+  list_data_sources: "stepLabels.list_data_sources",
+  inspect_schema: "stepLabels.inspect_schema",
+  preview_table: "stepLabels.preview_table",
+  run_sql_readonly: "stepLabels.run_sql_readonly",
+  retrieve_knowledge: "stepLabels.retrieve_knowledge",
+  read_file: "stepLabels.read_file",
+  edit_file: "stepLabels.edit_file",
+  write_file: "stepLabels.write_file",
+  list_files: "stepLabels.list_files",
+  grep: "stepLabels.grep",
+  mkdir: "stepLabels.mkdir",
+  file_stat: "stepLabels.file_stat",
+  execute_command: "stepLabels.execute_command",
+  promote_workspace_file: "stepLabels.promote_workspace_file",
+  task_write: "stepLabels.task_write",
+  task_update: "stepLabels.task_update",
+  task_complete: "stepLabels.task_complete",
+  task_check: "stepLabels.task_check",
+  ask_user: "stepLabels.ask_user",
+  submit_plan: "stepLabels.submit_plan",
 };
 
 const SUMMARY_PREVIEW_MAX = 48;
@@ -71,24 +77,24 @@ function formatSnakeCaseLabel(toolName: string): string {
     .join(" ");
 }
 
-function resolveSingleToolStepActionLabel(toolName: string): string {
+function resolveSingleToolStepActionLabel(toolName: string, t: TranslateFn = enT): string {
   const trimmed = toolName.trim();
-  if (!trimmed) return "Thinking";
+  if (!trimmed) return t("stepLabels.thinking");
 
-  const direct = toolActionLabels[trimmed];
-  if (direct) return direct;
+  const direct = toolActionLabelKeys[trimmed];
+  if (direct) return t(direct);
 
   const lookupName = normalizeToolLookupName(trimmed);
-  const lookupLabel = toolActionLabels[lookupName];
-  if (lookupLabel) return lookupLabel;
+  const lookupKey = toolActionLabelKeys[lookupName];
+  if (lookupKey) return t(lookupKey);
 
   if (/[\u4e00-\u9fff]/.test(trimmed)) {
     return trimmed;
   }
 
   if (lookupName !== trimmed) {
-    const namespacedDisplay = toolActionLabels[lookupName];
-    if (namespacedDisplay) return namespacedDisplay;
+    const namespacedKey = toolActionLabelKeys[lookupName];
+    if (namespacedKey) return t(namespacedKey);
   }
 
   if (trimmed.includes("_")) {
@@ -98,28 +104,28 @@ function resolveSingleToolStepActionLabel(toolName: string): string {
   return trimmed;
 }
 
-export function resolveToolStepActionLabel(toolNames: string[]): string {
+export function resolveToolStepActionLabel(toolNames: string[], t: TranslateFn = enT): string {
   const normalized = toolNames
     .map((name) => name.trim())
     .filter((name) => isDisplayableToolName(name));
   const unique = [...new Set(normalized)];
-  if (unique.length === 0) return "Thinking";
+  if (unique.length === 0) return t("stepLabels.thinking");
   if (unique.length === 1) {
     if (normalized.length > 1) {
-      return `Run ${normalized.length} tools in parallel`;
+      return t("stepLabels.parallelTools", { count: normalized.length });
     }
-    return resolveSingleToolStepActionLabel(unique[0]);
+    return resolveSingleToolStepActionLabel(unique[0], t);
   }
 
-  if (unique.every((name) => fileToolNames.has(name))) return "Handle files";
-  if (unique.every((name) => dataToolNames.has(name))) return "Analyze data";
-  if (unique.every((name) => workspaceToolNames.has(name))) return "Operate workspace";
+  if (unique.every((name) => fileToolNames.has(name))) return t("stepLabels.handleFiles");
+  if (unique.every((name) => dataToolNames.has(name))) return t("stepLabels.analyzeData");
+  if (unique.every((name) => workspaceToolNames.has(name))) return t("stepLabels.operateWorkspace");
 
-  const firstKnown = unique.find((name) => toolActionLabels[name]);
+  const firstKnown = unique.find((name) => toolActionLabelKeys[name]);
   if (firstKnown && unique.length === 2) {
-    return `${toolActionLabels[firstKnown]} etc.`;
+    return t("stepLabels.etcSuffix", { label: t(toolActionLabelKeys[firstKnown]) });
   }
-  return `Call ${unique.length} tools`;
+  return t("stepLabels.callCount", { count: unique.length });
 }
 
 function firstSummaryLine(text: string): string {
@@ -146,17 +152,20 @@ function buildThoughtPreview(content: string): string | undefined {
 }
 
 /** Step card subtitle — prefer Chinese tool labels over English LLM body text. */
-export function resolveStepSummaryText(input: {
-  content: string;
-  hasToolCalls: boolean;
-  displayToolNames: string;
-  toolActionLabel: string;
-  isThought: boolean;
-}): string {
+export function resolveStepSummaryText(
+  input: {
+    content: string;
+    hasToolCalls: boolean;
+    displayToolNames: string;
+    toolActionLabel: string;
+    isThought: boolean;
+  },
+  t: TranslateFn = enT,
+): string {
   const thoughtPreview = buildThoughtPreview(input.content);
   const toolPart = input.hasToolCalls
     ? input.displayToolNames
-      ? `Call ${input.displayToolNames}`
+      ? t("stepLabels.callNamed", { name: input.displayToolNames })
       : input.toolActionLabel
     : undefined;
 
@@ -181,35 +190,37 @@ export function resolveStepSummaryText(input: {
     if (thoughtPreview) {
       return thoughtPreview;
     }
-    return "Thinking";
+    return t("stepLabels.thinking");
   }
   if (thoughtPreview && looksChinese(thoughtPreview)) {
     return thoughtPreview;
   }
-  return thoughtPreview ? "Thinking" : "Step";
+  return thoughtPreview ? t("stepLabels.thinking") : t("stepLabels.step");
 }
 
 export function resolveCollaborationCompletedStepLabel(
   toolNames: string[],
   linkedToolName?: string,
+  t: TranslateFn = enT,
 ): string {
   const normalized = new Set(toolNames.map((name) => name.trim()).filter(Boolean));
   if (linkedToolName) normalized.add(linkedToolName);
-  if (normalized.has("submit_plan")) return "Plan approved";
-  if (normalized.has("ask_user")) return "Confirmation complete";
-  return "Collaboration complete";
+  if (normalized.has("submit_plan")) return t("stepLabels.planApproved");
+  if (normalized.has("ask_user")) return t("stepLabels.confirmationComplete");
+  return t("stepLabels.collaborationComplete");
 }
 
 export function resolveCollaborationStepLabel(
   toolNames: string[],
   isActive: boolean,
   linkedToolName?: string,
+  t: TranslateFn = enT,
 ): string {
   const normalized = new Set(toolNames.map((name) => name.trim()).filter(Boolean));
   if (linkedToolName) normalized.add(linkedToolName);
-  if (normalized.has("submit_plan")) return "Plan approval";
-  if (normalized.has("ask_user")) return isActive ? "Waiting for user choice" : "User collaboration";
-  return isActive ? "Waiting for confirmation" : "Collaboration step";
+  if (normalized.has("submit_plan")) return t("stepLabels.planApproval");
+  if (normalized.has("ask_user")) return isActive ? t("stepLabels.waitingUserChoice") : t("stepLabels.userCollaboration");
+  return isActive ? t("stepLabels.ask_user") : t("stepLabels.collaborationStep");
 }
 
 export function resolveStepBadgePresentation({
