@@ -327,6 +327,7 @@ import {
 } from "./session-pane-ui";
 import { LocaleProvider, useT } from "../../i18n/locale-context";
 import {
+  tx,
   translateConfigField,
   translateConfigFieldOptions,
 } from "../../i18n/config-labels";
@@ -976,6 +977,7 @@ export default function DataTasksApp() {
 }
 
 function DataTasksCopilotShell() {
+  const t = useT();
   const [copilotProperties, setCopilotProperties] = useState<Record<string, unknown>>(
     {},
   );
@@ -1001,7 +1003,7 @@ function DataTasksCopilotShell() {
           event instanceof Error
             ? event.message
             : String((event as { error?: unknown }).error ?? event);
-        if (message.includes("Run ended without emitting a terminal event")) {
+        if (message.includes(tx(t, "errors.noTerminalEvent", "Run ended without emitting a terminal event"))) {
           return;
         }
         if (
@@ -1375,7 +1377,7 @@ function DataTaskWorkspace({
       })
       .catch((error) => {
         if (!cancelled) {
-          setSessionSyncError(error instanceof Error ? error.message : "Failed to load server sessions");
+          setSessionSyncError(error instanceof Error ? error.message : tx(t, "errors.loadSessions", "Failed to load server sessions"));
         }
       });
     return () => {
@@ -1410,7 +1412,7 @@ function DataTaskWorkspace({
         return await updateItem(kind, item);
       } catch (error) {
         setConfigActionError(
-          error instanceof Error ? error.message : "Failed to save configuration",
+          error instanceof Error ? error.message : tx(t, "errors.saveConfig", "Failed to save configuration"),
         );
         throw error;
       }
@@ -1447,7 +1449,7 @@ function DataTaskWorkspace({
         return createdId;
       } catch (error) {
         setConfigActionError(
-          error instanceof Error ? error.message : "Failed to create configuration",
+          error instanceof Error ? error.message : tx(t, "errors.createConfig", "Failed to create configuration"),
         );
         throw error;
       }
@@ -1598,7 +1600,7 @@ function DataTaskWorkspace({
     try {
       await configApi.cancelRun(liveRun.runId, "user-requested");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to cancel run";
+      const message = error instanceof Error ? error.message : tx(t, "errors.cancelRun", "Failed to cancel run");
       setConfigActionError(message);
       throw error instanceof Error ? error : new Error(message);
     } finally {
@@ -1671,7 +1673,7 @@ function DataTaskWorkspace({
         setSessionSyncError(null);
       })
       .catch((error) => {
-        setSessionSyncError(error instanceof Error ? error.message : "Failed to sync session rename");
+        setSessionSyncError(error instanceof Error ? error.message : tx(t, "errors.syncRename", "Failed to sync session rename"));
       });
   }, []);
 
@@ -1777,7 +1779,7 @@ function DataTaskWorkspace({
             setActiveSessionId(previousActiveSessionId);
           }
           setSessionSyncError(
-            error instanceof Error ? error.message : "Failed to delete session on server",
+            error instanceof Error ? error.message : tx(t, "errors.deleteSession", "Failed to delete session on server"),
           );
         });
     },
@@ -2536,6 +2538,7 @@ function ToolCallSplitLayout({
   onSelectToolAction?: (toolCallId: string) => void;
   children: ReactNode;
 }) {
+  const t = useT();
   const selectable = Boolean(toolCallId && onSelectToolAction);
   const handleActivate = () => {
     if (toolCallId && onSelectToolAction) {
@@ -2585,7 +2588,7 @@ function ToolCallSplitLayout({
             }
           : undefined
       }
-      title={selectable ? "View tool details in the task console" : undefined}
+      title={selectable ? tx(t, "console.viewToolDetails", "View tool details in the task console") : undefined}
     >
       {enhancedChildren}
     </div>
@@ -2655,6 +2658,7 @@ function ToolResultCard({
   onActivate?: () => void;
   children: ReactNode;
 }) {
+  const t = useT();
   return (
     <div
       className="rounded-xl border border-border bg-surface p-3 text-sm text-muted shadow-[var(--shadow-card)]"
@@ -2674,7 +2678,7 @@ function ToolResultCard({
               }
             : undefined
         }
-        title={onActivate ? "View tool details in the task console" : undefined}
+        title={onActivate ? tx(t, "console.viewToolDetails", "View tool details in the task console") : undefined}
       >
         <div className="flex min-w-0 items-center gap-2">
           <span
@@ -2824,6 +2828,7 @@ function SchemaToolCard({
   status: ToolStatus;
   onSelectToolAction?: (toolCallId: string) => void;
 }) {
+  const t = useT();
   const displayStatus = useResolvedToolDisplayStatus(toolCallId, status, result);
   const effectiveResult = useEffectiveToolResult(toolCallId, result);
   const parsed = parseSchemaToolResult(effectiveResult) as SchemaResult | null;
@@ -2870,7 +2875,7 @@ function SchemaToolCard({
               ))}
             </div>
           ) : (
-            <ToolPayloadBlock title="Raw result" value={effectiveResult} tone="light" />
+            <ToolPayloadBlock title={tx(t, "console.rawResult", "Raw result")} value={effectiveResult} tone="light" />
           )}
         </ToolResultCard>
       ) : displayStatus === "failed" || resultIsError ? (
@@ -3146,6 +3151,7 @@ function StepReasoningMessage({
 
 /** Host pending HITL cards below the user turn when suspend lands before assistant bubble. */
 function StepUserMessage(props: CopilotChatUserMessageProps) {
+  const t = useT();
   const chatConfig = useCopilotChatConfiguration();
   const { agent } = useAgent({ agentId: chatConfig?.agentId ?? runtimeAgentId });
   const { copilotkit } = useCopilotKit();
@@ -3192,7 +3198,7 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
         }
         const idle = await waitForAgentIdle(agent);
         if (!idle) {
-          throw new Error("Could not stop the current run before rewriting.");
+          throw new Error(tx(t, "errors.stopBeforeRewrite", "Could not stop the current run before rewriting."));
         }
         const currentMessages = agent.messages ?? [];
         const index = currentMessages.findIndex((message) => message.id === props.message.id);
@@ -3268,7 +3274,7 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
           onClick={() => {
             if (canRewrite) setEditing(true);
           }}
-          title={canRewrite ? "Click to rewrite this question" : undefined}
+          title={canRewrite ? tx(t, "branch.clickRewrite", "Click to rewrite this question") : undefined}
         >
           <div className="whitespace-pre-wrap break-words">{content}</div>
         </div>
@@ -3280,8 +3286,8 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
               <button
                 type="button"
                 className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                title="Previous branch"
-                aria-label="Previous branch"
+                title={t("branch.previous")}
+                aria-label={t("branch.previous")}
                 onClick={() => {
                   if (branchState.previousSessionId) {
                     branchActions?.onSwitchBranch(branchState.previousSessionId, {
@@ -3298,8 +3304,8 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
               <button
                 type="button"
                 className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                title="Next branch"
-                aria-label="Next branch"
+                title={t("branch.next")}
+                aria-label={t("branch.next")}
                 onClick={() => {
                   if (branchState.nextSessionId) {
                     branchActions?.onSwitchBranch(branchState.nextSessionId, {
@@ -3317,8 +3323,8 @@ function StepUserMessage(props: CopilotChatUserMessageProps) {
             <button
               type="button"
               className="cursor-pointer rounded-md p-0.5 transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-              title={branchState.branchable ? "Rewrite from here" : "Refresh this question"}
-              aria-label={branchState.branchable ? "Rewrite from here" : "Refresh this question"}
+              title={branchState.branchable ? tx(t, "branch.rewriteFromHere", "Rewrite from here") : tx(t, "branch.refreshQuestion", "Refresh this question")}
+              aria-label={branchState.branchable ? tx(t, "branch.rewriteFromHere", "Rewrite from here") : tx(t, "branch.refreshQuestion", "Refresh this question")}
               onClick={() => setEditing(true)}
             >
               <PencilMenuIcon />
@@ -4067,7 +4073,7 @@ function StepSubPanel({
             ? "cursor-pointer transition-colors duration-150 hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
             : "cursor-default",
         ].join(" ")}
-        title={onHeaderClick ? "View step details in the task console" : undefined}
+        title={onHeaderClick ? tx(t, "console.viewStepDetails", "View step details in the task console") : undefined}
       >
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${styles.dot}`} />
         <span

@@ -168,7 +168,9 @@
     "sessionBusyInterrupting": "正在中断…",
     "sessionBusyDismiss": "取消发送",
     "sessionRemoteBusyBanner": "此对话正在其他端运行中，发送新消息前会提示你选择处理方式。",
-    "localQueuedNotice": "当前任务未完成，消息已加入发送队列。"
+    "localQueuedNotice": "当前任务未完成，消息已加入发送队列。",
+    "removeEvidence": "移除证据",
+    "addContent": "添加内容"
   },
   "sessionConfig": {
     "agentToolsSettings": "Agent 工具会话设置",
@@ -267,7 +269,7 @@
     "noFile": "无文件",
     "failedToAddToProject": "添加到项目失败",
     "failedToLoadVersionHistory": "加载版本历史失败",
-    "openFullReport": "打开以查看完整报告",
+    "openFullReport": "打开查看完整报告",
     "toolCalls": "工具调用",
     "usage": "用量",
     "toolDetails": "工具详情",
@@ -297,7 +299,18 @@
     "searchResultTable": "搜索结果表",
     "exportFilteredResult": "导出当前筛选 / 排序结果",
     "sourceStepNotLinked": "未关联来源步骤",
-    "failedToLoadPreview": "加载预览失败"
+    "failedToLoadPreview": "加载预览失败",
+    "viewToolDetails": "在任务控制台查看工具详情",
+    "viewStepDetails": "在任务控制台查看步骤详情",
+    "rawResult": "原始结果",
+    "stepDuration": "步骤耗时",
+    "inputTokens": "输入 Token",
+    "outputTokens": "输出 Token",
+    "previewEmpty": "预览数据为空或不受支持。",
+    "previewExpandFail": "展开后加载预览失败，请稍后重试。",
+    "previewNotViewable": "该输出暂无可查看的详情。",
+    "previewBinary": "该文件无法内联预览（二进制或过大），请使用下载获取完整文件。",
+    "previewNotEmbedded": "文件内容未内嵌，无法预览（过大或非文本）。"
   },
   "jobs": {
     "queued": "排队中",
@@ -1077,5 +1090,69 @@
     "other": "数据操作",
     "stepMeta": "步骤 {{n}} · {{kind}}",
     "stepMetaTools": "步骤 {{n}} · {{kind}} · {{count}} 次工具调用"
+  },
+  "workbench": {
+    "loading": "工作台加载中…"
+  },
+  "identity": {
+    "loadingAccount": "正在加载账号…",
+    "redirecting": "正在跳转登录…",
+    "registrationClosed": "注册已关闭，请联系部署管理员。",
+    "backToSignIn": "返回登录"
+  },
+  "branch": {
+    "previous": "上一分支",
+    "next": "下一分支",
+    "clickRewrite": "点击重写该问题",
+    "rewriteFromHere": "从此处重写",
+    "refreshQuestion": "重新回答该问题"
+  },
+  "errors": {
+    "loadSessions": "加载服务器会话失败",
+    "saveConfig": "保存配置失败",
+    "createConfig": "创建配置失败",
+    "cancelRun": "取消运行失败",
+    "syncRename": "同步会话重命名失败",
+    "deleteSession": "删除服务器会话失败",
+    "noTerminalEvent": "运行结束但未发出终止事件",
+    "stopBeforeRewrite": "重写前无法停止当前运行。"
+  },
+  "stepLabels": {
+    "list_data_sources": "查询数据源清单",
+    "inspect_schema": "查看表结构",
+    "preview_table": "预览数据",
+    "run_sql_readonly": "执行查询",
+    "retrieve_knowledge": "检索知识库",
+    "read_file": "读取文件",
+    "edit_file": "编辑文件",
+    "write_file": "写入文件",
+    "list_files": "浏览文件",
+    "grep": "搜索文件",
+    "mkdir": "创建目录",
+    "file_stat": "查看文件信息",
+    "execute_command": "执行命令",
+    "promote_workspace_file": "提升工作区文件",
+    "task_write": "写入任务",
+    "task_update": "更新任务",
+    "task_complete": "完成任务",
+    "task_check": "核对任务",
+    "ask_user": "等待确认",
+    "submit_plan": "提交计划",
+    "thinking": "思考中",
+    "step": "执行步骤",
+    "handleFiles": "处理文件",
+    "analyzeData": "分析数据",
+    "operateWorkspace": "操作工作区",
+    "parallelTools": "并行执行 {{count}} 个工具",
+    "callCount": "调用 {{count}} 个工具",
+    "callNamed": "调用 {{name}}",
+    "etcSuffix": "{{label}} 等",
+    "planApproved": "计划已确认",
+    "confirmationComplete": "确认完成",
+    "collaborationComplete": "协作完成",
+    "planApproval": "计划确认",
+    "waitingUserChoice": "等待用户选择",
+    "userCollaboration": "用户协作",
+    "collaborationStep": "协作步骤"
   }
 }

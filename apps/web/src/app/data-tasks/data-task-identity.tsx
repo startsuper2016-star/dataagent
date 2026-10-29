@@ -17,6 +17,8 @@ import {
 } from "../../lib/config-api/client";
 import { PasswordAuthShell } from "../../components/auth/auth-flow";
 import { LanguageToggle } from "../../i18n/LanguageToggle";
+import { createTranslator } from "../../i18n/translate";
+import { DEFAULT_LOCALE } from "../../i18n/types";
 import { useT } from "../../i18n/locale-context";
 
 type DataTaskIdentityContextValue = {
@@ -119,10 +121,10 @@ function PasswordIdentityProvider({ children }: { children: ReactNode }) {
   }, [loading, currentUser, value, router]);
 
   if (loading) {
-    return <PasswordAuthShell title="Loading account..." />;
+    return <PasswordAuthShell title={createTranslator(DEFAULT_LOCALE)("identity.loadingAccount")} />;
   }
   if (!currentUser || !value) {
-    return <PasswordAuthShell title="Redirecting to sign in..." />;
+    return <PasswordAuthShell title={createTranslator(DEFAULT_LOCALE)("identity.redirecting")} />;
   }
   return (
     <DataTaskIdentityContext.Provider value={value}>

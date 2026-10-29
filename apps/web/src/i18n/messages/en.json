@@ -168,7 +168,9 @@
     "sessionBusyInterrupting": "Interrupting…",
     "sessionBusyDismiss": "Cancel send",
     "sessionRemoteBusyBanner": "This chat is running on another device. You will be asked how to proceed before sending.",
-    "localQueuedNotice": "A run is still in progress, so your message was added to the send queue."
+    "localQueuedNotice": "A run is still in progress, so your message was added to the send queue.",
+    "removeEvidence": "Remove evidence",
+    "addContent": "Add content"
   },
   "sessionConfig": {
     "agentToolsSettings": "Agent Tools session settings",
@@ -297,7 +299,18 @@
     "searchResultTable": "Search result table",
     "exportFilteredResult": "Export the current filtered / sorted result",
     "sourceStepNotLinked": "Source step not linked",
-    "failedToLoadPreview": "Failed to load preview"
+    "failedToLoadPreview": "Failed to load preview",
+    "viewToolDetails": "View tool details in the task console",
+    "viewStepDetails": "View step details in the task console",
+    "rawResult": "Raw result",
+    "stepDuration": "Step duration",
+    "inputTokens": "Input tokens",
+    "outputTokens": "Output tokens",
+    "previewEmpty": "Preview data is empty or unsupported.",
+    "previewExpandFail": "Preview could not be loaded after expanding. Try again later.",
+    "previewNotViewable": "This output does not include viewable details yet.",
+    "previewBinary": "Inline preview is unavailable for this file (binary or too large). Use Download to get the full file.",
+    "previewNotEmbedded": "File content is not embedded for preview (too large or non-text)."
   },
   "jobs": {
     "queued": "Queued",
@@ -1077,5 +1090,69 @@
     "other": "Data operation",
     "stepMeta": "Step {{n}} · {{kind}}",
     "stepMetaTools": "Step {{n}} · {{kind}} · {{count}} tool calls"
+  },
+  "workbench": {
+    "loading": "Loading workbench…"
+  },
+  "identity": {
+    "loadingAccount": "Loading account...",
+    "redirecting": "Redirecting to sign in...",
+    "registrationClosed": "Registration is closed. Contact your deployment administrator.",
+    "backToSignIn": "Back to sign in"
+  },
+  "branch": {
+    "previous": "Previous branch",
+    "next": "Next branch",
+    "clickRewrite": "Click to rewrite this question",
+    "rewriteFromHere": "Rewrite from here",
+    "refreshQuestion": "Refresh this question"
+  },
+  "errors": {
+    "loadSessions": "Failed to load server sessions",
+    "saveConfig": "Failed to save configuration",
+    "createConfig": "Failed to create configuration",
+    "cancelRun": "Failed to cancel run",
+    "syncRename": "Failed to sync session rename",
+    "deleteSession": "Failed to delete session on server",
+    "noTerminalEvent": "Run ended without emitting a terminal event",
+    "stopBeforeRewrite": "Could not stop the current run before rewriting."
+  },
+  "stepLabels": {
+    "list_data_sources": "List data sources",
+    "inspect_schema": "Inspect schema",
+    "preview_table": "Preview data",
+    "run_sql_readonly": "Run query",
+    "retrieve_knowledge": "Retrieve knowledge",
+    "read_file": "Read file",
+    "edit_file": "Edit file",
+    "write_file": "Write file",
+    "list_files": "Browse files",
+    "grep": "Search files",
+    "mkdir": "Create directory",
+    "file_stat": "Get file info",
+    "execute_command": "Run command",
+    "promote_workspace_file": "Promote workspace file",
+    "task_write": "Write task",
+    "task_update": "Update task",
+    "task_complete": "Complete task",
+    "task_check": "Check task",
+    "ask_user": "Waiting for confirmation",
+    "submit_plan": "Submit plan",
+    "thinking": "Thinking",
+    "step": "Step",
+    "handleFiles": "Handle files",
+    "analyzeData": "Analyze data",
+    "operateWorkspace": "Operate workspace",
+    "parallelTools": "Run {{count}} tools in parallel",
+    "callCount": "Call {{count}} tools",
+    "callNamed": "Call {{name}}",
+    "etcSuffix": "{{label}} etc.",
+    "planApproved": "Plan approved",
+    "confirmationComplete": "Confirmation complete",
+    "collaborationComplete": "Collaboration complete",
+    "planApproval": "Plan approval",
+    "waitingUserChoice": "Waiting for user choice",
+    "userCollaboration": "User collaboration",
+    "collaborationStep": "Collaboration step"
   }
 }
