@@ -170,6 +170,21 @@ class OntologyCallbackClient:
             {"filters": filters or {}, "limit": limit},
         )
 
+    def apply_rules(
+        self,
+        entity: str,
+        filters: dict[str, Any] | None = None,
+        limit: int = 50,
+    ) -> Any:
+        """对实体绑定数据批量套用启用的推理规则（POST /rules/apply）。
+
+        返回 {rulesApplied, rulesSkipped?, rows, rowCount}——每行附 rule_labels 结论标注。
+        """
+        return self._post(
+            "/api/v1/ontology/rules/apply",
+            {"entity": entity, "filters": filters or {}, "limit": limit},
+        )
+
     # --- 数据助手（返回形态与元枢 helper 逐一对齐） ---------------------------------
 
     def query_rows(

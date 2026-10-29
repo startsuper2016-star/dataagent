@@ -23,6 +23,41 @@ function colMapFor(table: string): Record<string, string> {
   return Object.fromEntries(cols.map(c => [c, c]));
 }
 
+describe("rewriteObjectNames span awareness (P3-4 hardening)", () => {
+  const rewriter = (sql: string): ReturnType<typeof rewriteObjectNames> =>
+    rewriteObjectNames(sql, { AnomWafer: '"v_anom_wafer"', ToolEvent: '"dim_tool_event"' });
+
+  it("rewrites plain occurrences and records referenced objects", () => {
+    const r = rewriter("SELECT wafer_id FROM AnomWafer WHERE chamber_id = 'CH1'");
+    expect(r.sql).toContain("v_anom_wafer");
+    expect(r.referenced).toEqual(["AnomWafer"]);
+  });
+
+  it("leaves entity names inside string literals untouched", () => {
+    const sql = "SELECT note FROM t WHERE note = 'see AnomWafer rows'";
+    const r = rewriter(sql);
+    expect(r.sql).toBe(sql);
+    expect(r.referenced).toEqual([]);
+  });
+
+  it("leaves entity names inside comments untouched", () => {
+    const line = rewriter("-- AnomWafer baseline note\nSELECT * FROM AnomWafer");
+    expect(line.referenced).toEqual(["AnomWafer"]);
+    expect(line.sql).toContain("-- AnomWafer baseline note");
+
+    const block = rewriter("/* AnomWafer 历史口径 */ SELECT * FROM ToolEvent");
+    expect(block.sql).toContain("/* AnomWafer 历史口径 */");
+    expect(block.sql).toContain("dim_tool_event");
+    expect(block.referenced).toEqual(["ToolEvent"]);
+  });
+
+  it("treats quoted identifiers as opaque spans", () => {
+    const r = rewriter('SELECT "AnomWafer" AS x FROM t');
+    expect(r.referenced).toEqual([]);
+    expect(r.sql).toContain('"AnomWafer"');
+  });
+});
+
 describe("rewriteObjectNames", () => {
   it("rewrites with unicode-safe boundaries", () => {
     const { sql, referenced } = rewriteObjectNames(

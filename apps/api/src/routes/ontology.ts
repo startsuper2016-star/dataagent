@@ -875,6 +875,9 @@ const handleRulesRoute = async (
     requireMethod(method, "POST");
     return handleRuleEvaluate(request, ruleId, context);
   }
+  if (rest.length === 1 && rest[0] === "apply" && method === "POST") {
+    return handleRulesApply(request, context);
+  }
   if (rest.length === 1 && method === "PUT") {
     return handleRuleUpdate(request, ruleId, db);
   }
@@ -1099,6 +1102,126 @@ const handleRuleEvaluate = async (
     matchedRows: rows.length,
     truncated: rows.length >= limit ? "预览截断至 limit 行" : undefined,
     preview: { columns: [...Object.keys(binding.fieldMap), "rule_conclusion"], rows },
+  });
+};
+
+/** POST /rules/apply —— 推理规则批量应用：对实体绑定数据逐条套用启用的推理规则，
+ *  返回带 rule_labels 结论标注的行（问答派生属性的声明式通道）。
+ *  行级过滤（filter DSL）与 limit 可选；条件字段未映射的规则跳过并如实报告（不静默）。 */
+const handleRulesApply = async (
+  request: IncomingMessage,
+  context: OntologyRouteContext
+): Promise<ConfigApiResponse> => {
+  const db = context.metadataStore.db;
+  const body = await readJsonBody(request);
+  const entityName = stringValue(body.entity);
+  if (!entityName) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 entity");
+  }
+  const entityId = requireEntityId(db, entityName);
+  const filters = recordValue(body.filters) ?? {};
+  const limit = Math.min(Math.max(numberValue(body.limit) ?? 50, 1), 200);
+  const binding = resolveBinding(db, entityId);
+  const source = binding.sourceSql ? `(${binding.sourceSql})` : `"${binding.table}"`;
+  const fieldEntries = Object.entries(binding.fieldMap);
+  if (fieldEntries.length === 0) {
+    throw new OntologyHttpError(400, "BAD_REQUEST", "对象没有可查询的已映射属性");
+  }
+  const conn = openSpcConnection(context.metadataStore, context.userId);
+  const selectColumns = fieldEntries.map(([attr, col]) => `"${col}" AS "${attr}"`).join(", ");
+  let filterWhere: string[] = [];
+  let filterParams: unknown[] = [];
+  if (Object.keys(filters).length > 0) {
+    try {
+      const built = buildWhere(binding.fieldMap, filters);
+      filterWhere = built.where;
+      filterParams = built.params;
+    } catch (error) {
+      throw new OntologyHttpError(400, "BAD_REQUEST", error instanceof Error ? error.message : String(error));
+    }
+  }
+  const baseSql =
+    `SELECT ${selectColumns}, "${binding.idColumn}" AS "__row_id" FROM ${source}` +
+    (filterWhere.length > 0 ? " WHERE " + filterWhere.join(" AND ") : "") +
+    ` LIMIT ${limit}`;
+  const baseRows = conn.prepare(baseSql).all(...(filterParams as never[])) as Array<Record<string, unknown>>;
+
+  // 仅推理规则参与派生
+  const inferenceRules = db
+    .prepare(
+      "SELECT id, name, conditions_json, conclusion FROM ont_rules WHERE entity_id = ? AND enabled = 1 AND rule_type = 'inference' ORDER BY created_at"
+    )
+    .all(entityId) as Array<{ id: string; name: string; conditions_json: string; conclusion: string | null }>;
+  const rulesApplied: Array<Record<string, unknown>> = [];
+  const rulesSkipped: Array<Record<string, unknown>> = [];
+  const labelsByRowId = new Map<string, string[]>();
+  for (const rule of inferenceRules) {
+    const parsed = safeJsonParse(rule.conditions_json);
+    const conditions = Array.isArray(parsed) ? (parsed as Array<[string, string, string]>) : [];
+    if (conditions.length === 0) {
+      rulesSkipped.push({ name: rule.name, reason: "无条件体" });
+      continue;
+    }
+    const clauses: string[] = [];
+    const ruleParams: unknown[] = [];
+    let skipped: string | null = null;
+    for (const [field, op, rawValue] of conditions) {
+      const column = binding.fieldMap[field];
+      if (!column) {
+        skipped = `条件字段 ${field} 未映射`;
+        break;
+      }
+      if (op === "in") {
+        skipped = "不支持的运算符: in";
+        break;
+      }
+      if (op === "contains" || op === "starts_with" || op === "ends_with") {
+        const pattern = op === "contains" ? `%${rawValue}%` : op === "starts_with" ? `${rawValue}%` : `%${rawValue}`;
+        clauses.push(`"${column}" LIKE ?`);
+        ruleParams.push(pattern);
+        continue;
+      }
+      if (!["=", "!=", ">", ">=", "<", "<="].includes(op)) {
+        skipped = `不支持的运算符: ${op}`;
+        break;
+      }
+      clauses.push(`"${column}" ${op} ?`);
+      ruleParams.push(rawValue);
+    }
+    if (skipped) {
+      rulesSkipped.push({ name: rule.name, reason: skipped });
+      continue;
+    }
+    const ruleSql = `SELECT "${binding.idColumn}" AS "__id" FROM ${source} WHERE ${clauses.join(" AND ")}`;
+    const matched = conn.prepare(ruleSql).all(...(ruleParams as never[])) as Array<Record<string, unknown>>;
+    const idSet = new Set(matched.map((m) => String(m.__id)));
+    const conclusion = rule.conclusion ?? rule.name;
+    for (const row of baseRows) {
+      const rid = String(row.__row_id);
+      if (idSet.has(rid)) {
+        const arr = labelsByRowId.get(rid) ?? [];
+        arr.push(conclusion);
+        labelsByRowId.set(rid, arr);
+      }
+    }
+    rulesApplied.push({
+      name: rule.name,
+      expr: composeRuleExpr({ rule_type: "inference", conditions_json: rule.conditions_json, conclusion: rule.conclusion } as Parameters<typeof composeRuleExpr>[0]),
+      matchedRows: matched.length,
+      conclusion: rule.conclusion,
+    });
+  }
+  const rows = baseRows.map(({ __row_id, ...rest }) => ({
+    ...rest,
+    rule_labels: labelsByRowId.get(String(__row_id)) ?? [],
+  }));
+  return ok({
+    entity: entityName,
+    rulesApplied,
+    ...(rulesSkipped.length > 0 ? { rulesSkipped } : {}),
+    rowCount: rows.length,
+    truncated: baseRows.length >= limit ? "行数截断至 limit" : undefined,
+    rows,
   });
 };
 

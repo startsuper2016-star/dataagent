@@ -227,5 +227,30 @@ def ontology_eval_rule(
     return _json_result(result)
 
 
+@mcp.tool()
+def ontology_apply_rules(
+    entity: str,
+    filters: dict | None = None,
+    limit: int = 50,
+) -> CallToolResult:
+    """Apply ALL enabled inference rules of one ontology entity to its bound data.
+
+    Args:
+        entity: 实体名（本体管理清单中的对象）。
+        filters: 可选行级过滤（如 {"station": "PVD_TI"}）。
+        limit: 行数上限（默认 50，最大 200）；每行附 rule_labels 结论标注数组。
+
+    Returns:
+        {rulesApplied, rulesSkipped?, rows, rowCount}——规则派生属性的一次性批量标注，
+        适合回答「这批数据里哪些行命中了我们的业务规则」。
+    """
+    try:
+        result = get_executor().callbacks.apply_rules(entity, filters, limit)
+    except RuntimeError as err:
+        logger.warning("ontology_apply_rules(%s) failed: %s", entity, err)
+        return _error_result(str(err))
+    return _json_result(result)
+
+
 if __name__ == "__main__":
     start_mcp_server()

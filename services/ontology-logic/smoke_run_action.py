@@ -36,6 +36,16 @@ async def main() -> None:
             print("eval content:", rule.content[0].text[:400])
             assert not rule.isError
 
+
+            # 批量规则应用（ontology_apply_rules）：全规则一次套用
+            apply = await session.call_tool(
+                "ontology_apply_rules",
+                {"entity": "AnomWafer", "limit": 10},
+            )
+            print("apply isError:", apply.isError)
+            print("apply content:", apply.content[0].text[:400])
+            assert not apply.isError
+
             bad = await session.call_tool(
                 "ontology_run_action",
                 {"action_code": "mcp_discover_probe", "params": {}, "mode": "execute"},

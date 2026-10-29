@@ -1332,6 +1332,63 @@ describe("P3-7 rule evaluate and consistency", () => {
   });
 });
 
+describe("P3-8 rules apply batch", () => {
+  it("applies all enabled inference rules to entity rows in one call", async () => {
+    await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "apply_ch1",
+      ruleType: "inference",
+      conditions: [{ field: "chamber_id", op: "=", value: "CH1" }],
+      then: "CH1 观察对象",
+    });
+    await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "apply_lot",
+      ruleType: "inference",
+      conditions: [{ field: "lot", op: "=", value: "L2" }],
+      then: "L2 关注批次",
+    });
+
+    const applied = await postJson(["rules", "apply"], { entity: "AnomWafer" });
+    expect(applied.status).toBe(200);
+    const data = bodyOf(applied).data as {
+      rulesApplied: Array<{ name: string; matchedRows: number }>;
+      rows: Array<{ wafer_id: string; rule_labels: string[] }>;
+    };
+    expect(data.rulesApplied).toHaveLength(2);
+    const w1 = data.rows.find((r) => r.wafer_id === "w-001");
+    const w2 = data.rows.find((r) => r.wafer_id === "w-002");
+    expect(w1?.rule_labels).toEqual(["CH1 观察对象"]);
+    expect(w2?.rule_labels).toEqual(["L2 关注批次"]);
+
+    const scoped = await postJson(["rules", "apply"], {
+      entity: "AnomWafer",
+      filters: { chamber_id: "CH1" },
+      limit: 1,
+    });
+    expect(scoped.status).toBe(200);
+    const scopedData = bodyOf(scoped).data as { rowCount: number; rows: Array<{ wafer_id: string }> };
+    expect(scopedData.rowCount).toBe(1);
+    expect(scopedData.rows[0]?.wafer_id).toBe("w-001");
+  });
+
+  it("fails with a clear message when the entity has no mapped attributes", async () => {
+    await postJson(["entities"], { name: "SkipEntity", attributes: [{ name: "alpha" }] });
+    await postJson(["rules"], {
+      entity: "SkipEntity",
+      name: "skip_rule",
+      ruleType: "inference",
+      conditions: [{ field: "alpha", op: "=", value: "1" }],
+      then: "x",
+    });
+
+    // 实体尚无绑定：resolveBinding 先于字段映射检查，404「未绑定」语义
+    const applied = await postJson(["rules", "apply"], { entity: "SkipEntity" });
+    expect(applied.status).toBe(404);
+    expect(bodyOf(applied).error?.message).toContain("未绑定");
+  });
+});
+
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {
     const response = await call("GET", ["nope"], bodyRequest(""));

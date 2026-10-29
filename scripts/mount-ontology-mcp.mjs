@@ -98,6 +98,23 @@ const TOOL_MANIFEST = [
     }
   },
   {
+    name: "ontology_apply_rules",
+    description:
+      "Apply ALL enabled inference rules of one ontology entity to its bound data in one call, "
+      + "returning rows annotated with rule_labels (THEN conclusions). entity: 实体名；"
+      + "filters: 可选行级过滤。典型用途：回答「这批数据里哪些行命中了我们的业务规则」。"
+      + "规则在治理台逻辑规则页签维护。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity: { type: "string", description: "本体实体名" },
+        filters: { type: "object", additionalProperties: true, description: "行级过滤条件" },
+        limit: { type: "integer", default: 50, maximum: 200 }
+      },
+      required: ["entity"]
+    }
+  },
+  {
     name: "ontology_ping",
     description: "Connectivity check for the ontology-logic MCP server. Returns {\"pong\": true}.",
     inputSchema: { type: "object", properties: {} }
