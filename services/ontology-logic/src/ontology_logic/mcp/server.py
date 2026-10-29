@@ -138,6 +138,7 @@ def ontology_query(
     filters: dict | None = None,
     limit: int = 100,
     offset: int = 0,
+    apply_rules: bool = False,
 ) -> CallToolResult:
     """Query rows of one ontology entity through the apps/api HTTP callback.
 
@@ -148,11 +149,12 @@ def ontology_query(
         offset: 翻页偏移（默认 0）。
 
     Returns:
-        {"rows": [dict], "rowCount": n}；回调失败时 isError content（D5 原文）。
+        {"rows": [dict], "rowCount": n}；apply_rules=True 时每行附 rule_conclusions 结论标注。
+        回调失败时 isError content（D5 原文）。
     """
     try:
         rows = get_executor().callbacks.query_rows(
-            entity, filters or {}, limit=limit, offset=offset
+            entity, filters or {}, limit=limit, offset=offset, apply_rules=apply_rules
         )
     except RuntimeError as err:
         # 回调失败（D5 契约：超时/非 200/错误信封）→ isError 原文透传。

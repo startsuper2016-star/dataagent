@@ -188,12 +188,12 @@ class OntologyCallbackClient:
     # --- 数据助手（返回形态与元枢 helper 逐一对齐） ---------------------------------
 
     def query_rows(
-        self, entity_name: str, filters: dict, limit: int = 100, offset: int = 0
+        self, entity_name: str, filters: dict, limit: int = 100, offset: int = 0, apply_rules: bool = False
     ) -> list[dict]:
         """POST /api/v1/ontology/query → list[dict]（每行按 columns 字典化）。"""
         data = self._post(
             "/api/v1/ontology/query",
-            {"entity": entity_name, "filters": filters, "limit": limit, "offset": offset},
+            {"entity": entity_name, "filters": filters, "limit": limit, "offset": offset, **({"apply_rules": True} if apply_rules else {})},
         )
         return _rows_as_dicts(data)
 

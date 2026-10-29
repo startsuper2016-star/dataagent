@@ -38,6 +38,18 @@ async def main() -> None:
 
 
             # 批量规则应用（ontology_apply_rules）：全规则一次套用
+
+            # ontology_query + apply_rules：结论标注列
+            q = await session.call_tool(
+                "ontology_query",
+                {"entity": "AnomWafer", "apply_rules": True, "limit": 10},
+            )
+            print("query isError:", q.isError)
+            qtext = q.content[0].text[:500]
+            print("query content:", qtext)
+            assert not q.isError
+            assert "rule_conclusions" in qtext, "apply_rules 标注列缺失"
+
             apply = await session.call_tool(
                 "ontology_apply_rules",
                 {"entity": "AnomWafer", "limit": 10},

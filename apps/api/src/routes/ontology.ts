@@ -32,7 +32,8 @@ import type { ConfigApiContext, ConfigApiResponse } from "./types.js";
  *
  * 端点分两组：
  * 只读（数据连接以 readOnly 打开作第二道防线）：
- * - POST /api/v1/ontology/query    {entity, filters?, limit?, offset?} → {columns, rows, rowCount}
+ * - POST /api/v1/ontology/query    {entity, filters?, limit?, offset?, applyRules?} → {columns, rows, rowCount, rulesApplied?}
+ *   （applyRules=true 时追加 rule_conclusions 列：启用的推理规则 THEN 结论标注，opt-in 不改默认形状）
  * - POST /api/v1/ontology/sql      {sql, params?}                      → {columns, rows, rowCount}
  * - POST /api/v1/ontology/traverse {fromEntity, fromFilters?, toEntity, limit?} → {columns, rows, rowCount}
  * - GET  /api/v1/ontology/bindings                                     → {bindings: [{entity, table, status}]}
@@ -156,11 +157,78 @@ const handleQuery = async (
     throw new OntologyHttpError(400, "BAD_REQUEST", "缺少 entity");
   }
   const db = context.metadataStore.db;
-  const binding = resolveBinding(db, requireEntityId(db, entityName));
+  const entityId = requireEntityId(db, entityName);
+  const binding = resolveBinding(db, entityId);
   const conn = openSpcConnection(context.metadataStore, context.userId);
-  return ok(
-    objectQuery(conn, binding, filtersOf(body), numberValue(body.limit) ?? 20, numberValue(body.offset) ?? 0)
-  );
+  const result = objectQuery(conn, binding, filtersOf(body), numberValue(body.limit) ?? 20, numberValue(body.offset) ?? 0);
+  // applyRules（opt-in）：启用的推理规则对返回行做 THEN 结论标注——
+  // 追加 rule_conclusions 列，不改变默认输出形状（不传则完全同旧契约）
+  // python 回调侧走 snake_case，web 走 camelCase——两种键名都接受
+  const applyRulesRequested = body.applyRules === true || body.apply_rules === true;
+  if (!applyRulesRequested) {
+    return ok(result);
+  }
+  const rules = db
+    .prepare(
+      "SELECT name, conditions_json, conclusion FROM ont_rules WHERE entity_id = ? AND enabled = 1 AND rule_type = 'inference' ORDER BY created_at"
+    )
+    .all(entityId) as Array<{ name: string; conditions_json: string; conclusion: string | null }>;
+  if (rules.length === 0) {
+    return ok(result);
+  }
+  const matchValue = (actual: unknown, op: string, expected: string): boolean => {
+    const a = String(actual ?? "");
+    if (op === "contains") return a.includes(expected);
+    if (op === "starts_with") return a.startsWith(expected);
+    if (op === "ends_with") return a.endsWith(expected);
+    const na = Number(actual);
+    const nv = Number(expected);
+    const numeric = a.trim() !== "" && Number.isFinite(na) && Number.isFinite(nv);
+    switch (op) {
+      case "=": return numeric ? na === nv : a === expected;
+      case "!=": return numeric ? na !== nv : a !== expected;
+      case ">": return numeric ? na > nv : a > expected;
+      case ">=": return numeric ? na >= nv : a >= expected;
+      case "<": return numeric ? na < nv : a < expected;
+      case "<=": return numeric ? na <= nv : a <= expected;
+      default: return false;
+    }
+  };
+  const compiled = rules.map((rule) => {
+    const parsed = safeJsonParse(rule.conditions_json);
+    const conditions = Array.isArray(parsed) ? (parsed as Array<[string, string, string]>) : [];
+    return {
+      name: rule.name,
+      conclusion: rule.conclusion ?? rule.name,
+      conditions: conditions.map(([field, op, value]) => ({ field, op, expected: String(value) })),
+    };
+  });
+  const rows = result.rows.map((row) => {
+    const obj: Record<string, unknown> = {};
+    result.columns.forEach((c, i) => {
+      obj[c] = row[i];
+    });
+    const labels = compiled
+      .filter(({ conditions }) => conditions.length > 0 && conditions.every((c) => matchValue(obj[c.field], c.op, c.expected)))
+      .map(({ conclusion }) => conclusion);
+    return [...row, labels.join("；")];
+  });
+  const columns = [...result.columns, "rule_conclusions"];
+  const rulesApplied = compiled.map(({ name, conclusion, conditions }) => ({
+    name,
+    conclusion,
+    matchedRows: rows.filter((r) => {
+      const labels = String(r[r.length - 1] ?? "").split("；");
+      return labels.includes(conclusion);
+    }).length,
+    conditions,
+  }));
+  return ok({
+    columns,
+    rows,
+    rowCount: result.rowCount,
+    rulesApplied,
+  });
 };
 
 const handleSql = async (

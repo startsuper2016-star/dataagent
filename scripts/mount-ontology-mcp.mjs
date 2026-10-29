@@ -58,7 +58,8 @@ const TOOL_MANIFEST = [
         entity: { type: "string", description: "本体实体名" },
         filters: { type: "object", additionalProperties: true, description: "等值/范围过滤条件" },
         limit: { type: "integer", default: 100 },
-        offset: { type: "integer", default: 0 }
+        offset: { type: "integer", default: 0 },
+        apply_rules: { type: "boolean", default: false, description: "true 时按启用的推理规则对每行追加 rule_conclusions 结论标注列" }
       },
       required: ["entity"]
     }

@@ -1388,6 +1388,39 @@ describe("P3-8 rules apply batch", () => {
     expect(bodyOf(applied).error?.message).toContain("未绑定");
   });
 });
+  describe("applyRules opt-in annotation", () => {
+
+  it("applyRules opt-in annotates query rows with inference conclusions", async () => {
+    await postJson(["rules"], {
+      entity: "AnomWafer",
+      name: "query_ch1",
+      ruleType: "inference",
+      conditions: [{ field: "chamber_id", op: "=", value: "CH1" }],
+      then: "CH1 观察对象",
+    });
+
+    // 默认形状不变
+    const plain = await postJson(["query"], { entity: "AnomWafer" });
+    expect(plain.status).toBe(200);
+    expect((bodyOf(plain).data as { columns: string[] }).columns).not.toContain("rule_conclusions");
+
+    // opt-in：追加结论列 + rulesApplied 汇总
+    const annotated = await postJson(["query"], { entity: "AnomWafer", applyRules: true });
+    expect(annotated.status).toBe(200);
+    const data = bodyOf(annotated).data as {
+      columns: string[];
+      rows: Array<unknown[]>;
+      rulesApplied: Array<{ name: string; matchedRows: number }>;
+    };
+    expect(data.columns[data.columns.length - 1]).toBe("rule_conclusions");
+    const ch1Index = data.rows.findIndex((r) => r[data.columns.indexOf("chamber_id")] === "CH1");
+    const ch2Index = data.rows.findIndex((r) => r[data.columns.indexOf("chamber_id")] === "CH2");
+    expect(data.rows[ch1Index]?.[data.columns.indexOf("rule_conclusions")]).toBe("CH1 观察对象");
+    expect(data.rows[ch2Index]?.[data.columns.indexOf("rule_conclusions")]).toBe("");
+    expect(data.rulesApplied).toHaveLength(1);
+    expect(data.rulesApplied[0]).toMatchObject({ name: "query_ch1", matchedRows: 1 });
+  });
+  });
 
 describe("routing and transport errors", () => {
   it("returns 404 for an unknown ontology endpoint", async () => {

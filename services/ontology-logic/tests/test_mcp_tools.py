@@ -41,7 +41,7 @@ class FakeCallbackClient:
         self.tables = tables
         self.baseline_row = baseline_row
 
-    def query_rows(self, entity_name, filters, limit=100, offset=0):
+    def query_rows(self, entity_name, filters, limit=100, offset=0, apply_rules=False):
         rows = self.tables.get(entity_name, [])
         for key, cond in (filters or {}).items():
             if isinstance(cond, dict) and "gte" in cond:
