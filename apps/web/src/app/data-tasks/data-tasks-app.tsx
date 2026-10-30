@@ -2738,9 +2738,10 @@ function ToolPendingHint({ displayStatus }: { displayStatus: ToolDisplayStatus }
 }
 
 function ToolResultMissingCard({ name }: { name: string }) {
+  const t = useT();
   return (
     <div className="rounded-xl border border-dashed border-border bg-surface-subtle p-3 text-xs leading-5 text-muted">
-      <div className="font-semibold text-foreground">Execution result not synced</div>
+      <div className="font-semibold text-foreground">{t("toolResult.notSynced")}</div>
       <p className="mt-1">
         <span className="font-mono">{name}</span>{" "}
          tool observation has not reached the frontend thread. If the right-side Trace already has SQL audit or step

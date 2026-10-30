@@ -1154,5 +1154,31 @@
     "waitingUserChoice": "等待用户选择",
     "userCollaboration": "用户协作",
     "collaborationStep": "协作步骤"
+  },
+  "toolResult": {
+    "rows": "行数",
+    "duration": "耗时",
+    "audit": "审计",
+    "output": "输出",
+    "table": "数据表",
+    "path": "路径",
+    "size": "大小",
+    "directory": "目录",
+    "type": "类型",
+    "modified": "修改时间",
+    "datasource": "数据源",
+    "tasks": "任务",
+    "completed": "已完成",
+    "status": "状态",
+    "allCompleted": "全部完成",
+    "knowledgeBase": "知识库",
+    "noStdout": "命令执行完成，无标准输出。",
+    "dirCreated": "目录已创建。",
+    "fileWritten": "文件已写入工作区。",
+    "notSynced": "执行结果未同步",
+    "queryNoRows": "查询未返回任何行。",
+    "statusCompleted": "已完成",
+    "statusInProgress": "进行中",
+    "statusPending": "待处理"
   }
 }

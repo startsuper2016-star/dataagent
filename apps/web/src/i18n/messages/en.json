@@ -1154,5 +1154,31 @@
     "waitingUserChoice": "Waiting for user choice",
     "userCollaboration": "User collaboration",
     "collaborationStep": "Collaboration step"
+  },
+  "toolResult": {
+    "rows": "Rows",
+    "duration": "Duration",
+    "audit": "Audit",
+    "output": "Output",
+    "table": "Table",
+    "path": "Path",
+    "size": "Size",
+    "directory": "Directory",
+    "type": "Type",
+    "modified": "Modified",
+    "datasource": "Datasource",
+    "tasks": "Tasks",
+    "completed": "Completed",
+    "status": "Status",
+    "allCompleted": "All completed",
+    "knowledgeBase": "Knowledge base",
+    "noStdout": "Command ran with no stdout.",
+    "dirCreated": "Directory created.",
+    "fileWritten": "File written to the workspace.",
+    "notSynced": "Execution result not synced",
+    "queryNoRows": "The query returned no rows.",
+    "statusCompleted": "Completed",
+    "statusInProgress": "In progress",
+    "statusPending": "Pending"
   }
 }
